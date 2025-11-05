@@ -1250,4 +1250,21 @@ class Polar {
     );
     return PolarDeviceInformation.fromJson(jsonDecode(response));
   }
+
+  /// Request battery status directly from the device.
+  ///
+  /// This method directly requests the current battery level without waiting for
+  /// the automatic callback. Useful for getting battery status on-demand.
+  ///
+  /// [identifier] Polar device ID or BT address
+  /// Returns: Future with battery level (0-100)
+  ///   - success: Returns integer battery level percentage
+  ///   - onError: Possible errors are returned as exceptions
+  Future<int> requestBatteryStatus(String identifier) async {
+    final response = await _methodChannel.invokeMethod(
+      'requestBatteryStatus',
+      identifier,
+    );
+    return response as int;
+  }
 }

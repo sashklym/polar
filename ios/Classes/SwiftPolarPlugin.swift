@@ -176,6 +176,8 @@ public class SwiftPolarPlugin:
         sendTerminateAndStopSyncNotifications(call, result)
       case "requestDeviceInformation":
         requestDeviceInformation(call, result)
+      case "requestBatteryStatus":
+        requestBatteryStatus(call, result)
       default: result(FlutterMethodNotImplemented)
       }
     } catch {
@@ -1582,6 +1584,28 @@ private func success(_ event: String, data: Any? = nil) {
         onFailure: { error in
           result(FlutterError(
             code: "ERROR_REQUESTING_DEVICE_INFO",
+            message: error.localizedDescription,
+            details: nil))
+        }
+      )
+  }
+
+  func requestBatteryStatus(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    guard let identifier = call.arguments as? String else {
+      result(FlutterError(code: "INVALID_ARGUMENT",
+                        message: "Expected a device identifier as a String",
+                        details: nil))
+      return
+    }
+
+    _ = api.requestBatteryStatus(identifier)
+      .subscribe(
+        onSuccess: { batteryLevel in
+          result(batteryLevel)
+        },
+        onFailure: { error in
+          result(FlutterError(
+            code: "ERROR_REQUESTING_BATTERY_STATUS",
             message: error.localizedDescription,
             details: nil))
         }

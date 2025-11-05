@@ -196,6 +196,7 @@ class PolarPlugin :
             "sendInitializationAndStartSyncNotifications" -> sendInitializationAndStartSyncNotifications(call, result)
             "sendTerminateAndStopSyncNotifications" -> sendTerminateAndStopSyncNotifications(call, result)
             "requestDeviceInformation" -> requestDeviceInformation(call, result)
+            "requestBatteryStatus" -> requestBatteryStatus(call, result)
             else -> result.notImplemented()
         }
     }
@@ -1514,6 +1515,26 @@ class PolarPlugin :
             }, { error ->
                 runOnUiThread {
                     result.error("ERROR_REQUESTING_DEVICE_INFO", error.message, null)
+                }
+            })
+            .discard()
+    }
+
+    private fun requestBatteryStatus(call: MethodCall, result: Result) {
+        val identifier = call.arguments as? String ?: run {
+            result.error("INVALID_ARGUMENT", "Expected a device identifier as a String", null)
+            return
+        }
+
+        wrapper.api
+            .requestBatteryStatus(identifier)
+            .subscribe({ batteryLevel ->
+                runOnUiThread {
+                    result.success(batteryLevel)
+                }
+            }, { error ->
+                runOnUiThread {
+                    result.error("ERROR_REQUESTING_BATTERY_STATUS", error.message, null)
                 }
             })
             .discard()
