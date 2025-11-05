@@ -174,6 +174,8 @@ public class SwiftPolarPlugin:
         sendInitializationAndStartSyncNotifications(call, result)
       case "sendTerminateAndStopSyncNotifications":
         sendTerminateAndStopSyncNotifications(call, result)
+      case "requestDeviceInformation":
+        requestDeviceInformation(call, result)
       default: result(FlutterMethodNotImplemented)
       }
     } catch {
@@ -1536,6 +1538,52 @@ private func success(_ event: String, data: Any? = nil) {
           result(FlutterError(code: error.localizedDescription,
                             message: error.localizedDescription,
                             details: nil))
+        }
+      )
+  }
+
+  func requestDeviceInformation(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    guard let identifier = call.arguments as? String else {
+      result(FlutterError(code: "INVALID_ARGUMENT",
+                        message: "Expected a device identifier as a String",
+                        details: nil))
+      return
+    }
+
+    _ = api.requestDeviceInformation(identifier)
+      .subscribe(
+        onSuccess: { deviceInfo in
+          // Convert PolarDeviceInformation to a dictionary
+          let info: [String: String] = [
+            "firmwareVersion": deviceInfo.firmwareVersion,
+            "hardwareCode": deviceInfo.hardwareCode,
+            "designRevision": deviceInfo.designRevision,
+            "manufactureDate": deviceInfo.manufactureDate,
+            "productionRevision": deviceInfo.productionRevision,
+            "manufacturerName": deviceInfo.manufacturerName,
+            "batteryDeviceType": deviceInfo.batteryDeviceType,
+            "model": deviceInfo.model,
+            "serialNumber": deviceInfo.serialNumber,
+            "pcbRevision": deviceInfo.pcbRevision,
+            "softwareRevision": deviceInfo.softwareRevision,
+            "hardwareRevision": deviceInfo.hardwareRevision
+          ]
+          
+          guard let jsonData = try? JSONSerialization.data(withJSONObject: info, options: []),
+                let jsonString = String(data: jsonData, encoding: .utf8) else {
+            result(FlutterError(
+              code: "ENCODING_ERROR",
+              message: "Failed to encode device information",
+              details: nil))
+            return
+          }
+          result(jsonString)
+        },
+        onFailure: { error in
+          result(FlutterError(
+            code: "ERROR_REQUESTING_DEVICE_INFO",
+            message: error.localizedDescription,
+            details: nil))
         }
       )
   }

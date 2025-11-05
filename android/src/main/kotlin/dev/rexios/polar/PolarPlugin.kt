@@ -195,6 +195,7 @@ class PolarPlugin :
             "getActivitySampleData" -> getActivitySampleData(call, result)
             "sendInitializationAndStartSyncNotifications" -> sendInitializationAndStartSyncNotifications(call, result)
             "sendTerminateAndStopSyncNotifications" -> sendTerminateAndStopSyncNotifications(call, result)
+            "requestDeviceInformation" -> requestDeviceInformation(call, result)
             else -> result.notImplemented()
         }
     }
@@ -1479,6 +1480,40 @@ class PolarPlugin :
             }, { error ->
                 runOnUiThread {
                     result.error(error.toString(), error.message, null)
+                }
+            })
+            .discard()
+    }
+
+    private fun requestDeviceInformation(call: MethodCall, result: Result) {
+        val identifier = call.arguments as? String ?: run {
+            result.error("INVALID_ARGUMENT", "Expected a device identifier as a String", null)
+            return
+        }
+
+        wrapper.api
+            .requestDeviceInformation(identifier)
+            .subscribe({ deviceInfo ->
+                runOnUiThread {
+                    val info = mapOf(
+                        "firmwareVersion" to deviceInfo.firmwareVersion,
+                        "hardwareCode" to deviceInfo.hardwareCode,
+                        "designRevision" to deviceInfo.designRevision,
+                        "manufactureDate" to deviceInfo.manufactureDate,
+                        "productionRevision" to deviceInfo.productionRevision,
+                        "manufacturerName" to deviceInfo.manufacturerName,
+                        "batteryDeviceType" to deviceInfo.batteryDeviceType,
+                        "model" to deviceInfo.model,
+                        "serialNumber" to deviceInfo.serialNumber,
+                        "pcbRevision" to deviceInfo.pcbRevision,
+                        "softwareRevision" to deviceInfo.softwareRevision,
+                        "hardwareRevision" to deviceInfo.hardwareRevision
+                    )
+                    result.success(gson.toJson(info))
+                }
+            }, { error ->
+                runOnUiThread {
+                    result.error("ERROR_REQUESTING_DEVICE_INFO", error.message, null)
                 }
             })
             .discard()

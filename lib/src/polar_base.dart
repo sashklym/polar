@@ -1230,4 +1230,24 @@ class Polar {
       identifier,
     );
   }
+
+  /// Request device information from DIS (Device Information Service).
+  ///
+  /// This method directly requests the device information without waiting for
+  /// the automatic callback. Returns comprehensive device information including
+  /// firmware version, hardware details, serial number, etc.
+  ///
+  /// [identifier] Polar device ID or BT address
+  /// Returns: Future with complete device information
+  ///   - success: Returns PolarDeviceInformation with all device details
+  ///   - onError: Possible errors are returned as exceptions
+  Future<PolarDeviceInformation> requestDeviceInformation(
+    String identifier,
+  ) async {
+    final response = await _methodChannel.invokeMethod(
+      'requestDeviceInformation',
+      identifier,
+    );
+    return PolarDeviceInformation.fromJson(jsonDecode(response));
+  }
 }
