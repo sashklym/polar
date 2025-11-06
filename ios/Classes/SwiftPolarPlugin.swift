@@ -645,6 +645,7 @@ private func success(_ event: String, data: Any? = nil) {
     else {
       return
     }
+    print("📱 iOS Device connected: \(polarDeviceInfo.deviceId)")
     success("deviceConnected", data: data)
   }
 
@@ -693,8 +694,36 @@ private func success(_ event: String, data: Any? = nil) {
   }
 
   public func disInformationReceived(_ identifier: String, uuid: CBUUID, value: String) {
+      // Cache the device information for later retrieval
+      // Map standard Bluetooth DIS UUIDs to readable keys
+      if deviceInfoCache[identifier] == nil {
+        deviceInfoCache[identifier] = [:]
+      }
+      
+      let key = mapDISUUIDToKey(uuid)
+      deviceInfoCache[identifier]?[key] = value
+      
+      // Log for debugging
+      print("📱 iOS DIS callback (UUID) - Device: \(identifier), UUID: \(uuid.uuidString), Key: \(key), Value: \(value)")
+      
       success(
       "disInformationReceived", data: [identifier, uuid.uuidString, value])
+  }
+  
+  private func mapDISUUIDToKey(_ uuid: CBUUID) -> String {
+    // Standard Bluetooth DIS (Device Information Service) characteristic UUIDs
+    switch uuid.uuidString.uppercased() {
+    case "2A29": return "manufacturerName"
+    case "2A24": return "modelNumber"
+    case "2A25": return "serialNumber"
+    case "2A27": return "hardwareRevision"
+    case "2A26": return "firmwareRevision"
+    case "2A28": return "softwareRevision"
+    case "2A23": return "systemId"
+    case "2A2A": return "regulatoryCertification"
+    case "2A50": return "pnpId"
+    default: return uuid.uuidString
+    }
   }
 
   public func disInformationReceivedWithKeysAsStrings(
@@ -705,6 +734,9 @@ private func success(_ event: String, data: Any? = nil) {
         deviceInfoCache[identifier] = [:]
       }
       deviceInfoCache[identifier]?[key] = value
+      
+      // Log for debugging
+      print("📱 iOS DIS callback - Device: \(identifier), Key: \(key), Value: \(value)")
       
       success("disInformationReceived", data: [identifier, key, value])
   }
@@ -1577,14 +1609,19 @@ private func success(_ event: String, data: Any? = nil) {
       return
     }
 
-    // Check if we have cached device information for this identifier
-    guard let cachedInfo = deviceInfoCache[identifier], !cachedInfo.isEmpty else {
-      result(FlutterError(
-        code: "NO_DATA_AVAILABLE",
-        message: "Device information not yet received. Please connect to the device first and wait for DIS data to be received via callbacks.",
-        details: nil))
-      return
+    // Log current cache state for debugging
+    print("📱 iOS requestDeviceInformation called for: \(identifier)")
+    if let cachedInfo = deviceInfoCache[identifier] {
+      print("📱 iOS cached info keys: \(cachedInfo.keys.sorted())")
+      for (key, value) in cachedInfo.sorted(by: { $0.key < $1.key }) {
+        print("📱 iOS   \(key): \(value)")
+      }
+    } else {
+      print("📱 iOS No cached info for device \(identifier)")
     }
+    
+    // Get cached info, or use empty dict if not available yet
+    let cachedInfo = deviceInfoCache[identifier] ?? [:]
     
     // Map common DIS characteristic keys to the expected format
     // The keys are based on Bluetooth DIS (Device Information Service) standard
@@ -1602,6 +1639,8 @@ private func success(_ event: String, data: Any? = nil) {
       "softwareRevision": cachedInfo["softwareRevision"] ?? cachedInfo["software_revision"] ?? "",
       "hardwareRevision": cachedInfo["hardwareRevision"] ?? cachedInfo["hardware_revision"] ?? ""
     ]
+    
+    print("📱 iOS Returning device info: \(info)")
     
     guard let jsonData = try? JSONSerialization.data(withJSONObject: info, options: []),
           let jsonString = String(data: jsonData, encoding: .utf8) else {
