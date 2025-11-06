@@ -43,6 +43,10 @@ public class SwiftPolarPlugin:
 
   var api: PolarBleApi!
   var events: FlutterEventSink?
+  
+  /// Cache for device information received via DIS callbacks
+  /// Key: device identifier, Value: Dictionary of DIS key-value pairs
+  var deviceInfoCache = [String: [String: String]]()
     
   init(
     messenger: FlutterBinaryMessenger,
@@ -645,6 +649,10 @@ private func success(_ event: String, data: Any? = nil) {
     else {
       return
     }
+    
+    // Clear cached device information when device disconnects
+    deviceInfoCache.removeValue(forKey: polarDeviceInfo.deviceId)
+    
     success("deviceDisconnected", data: [data, pairingError])
   }
 
@@ -684,6 +692,12 @@ private func success(_ event: String, data: Any? = nil) {
   public func disInformationReceivedWithKeysAsStrings(
     _ identifier: String, key: String, value: String
   ) {
+      // Cache the device information for later retrieval
+      if deviceInfoCache[identifier] == nil {
+        deviceInfoCache[identifier] = [:]
+      }
+      deviceInfoCache[identifier]?[key] = value
+      
       success("disInformationReceived", data: [identifier, key, value])
   }
 
@@ -1544,6 +1558,9 @@ private func success(_ event: String, data: Any? = nil) {
       )
   }
 
+  // Note: iOS PolarBleSDK 6.9.0 doesn't have a requestDeviceInformation API like Android.
+  // Instead, we collect device information from the disInformationReceived callbacks
+  // and return the cached data when requested.
   func requestDeviceInformation(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let identifier = call.arguments as? String else {
       result(FlutterError(code: "INVALID_ARGUMENT",
@@ -1552,42 +1569,41 @@ private func success(_ event: String, data: Any? = nil) {
       return
     }
 
-    _ = api.requestDeviceInformation(identifier)
-      .subscribe(
-        onSuccess: { deviceInfo in
-          // Convert PolarDeviceInformation to a dictionary
-          let info: [String: String] = [
-            "firmwareVersion": deviceInfo.firmwareVersion,
-            "hardwareCode": deviceInfo.hardwareCode,
-            "designRevision": deviceInfo.designRevision,
-            "manufactureDate": deviceInfo.manufactureDate,
-            "productionRevision": deviceInfo.productionRevision,
-            "manufacturerName": deviceInfo.manufacturerName,
-            "batteryDeviceType": deviceInfo.batteryDeviceType,
-            "model": deviceInfo.model,
-            "serialNumber": deviceInfo.serialNumber,
-            "pcbRevision": deviceInfo.pcbRevision,
-            "softwareRevision": deviceInfo.softwareRevision,
-            "hardwareRevision": deviceInfo.hardwareRevision
-          ]
-          
-          guard let jsonData = try? JSONSerialization.data(withJSONObject: info, options: []),
-                let jsonString = String(data: jsonData, encoding: .utf8) else {
-            result(FlutterError(
-              code: "ENCODING_ERROR",
-              message: "Failed to encode device information",
-              details: nil))
-            return
-          }
-          result(jsonString)
-        },
-        onFailure: { error in
-          result(FlutterError(
-            code: "ERROR_REQUESTING_DEVICE_INFO",
-            message: error.localizedDescription,
-            details: nil))
-        }
-      )
+    // Check if we have cached device information for this identifier
+    guard let cachedInfo = deviceInfoCache[identifier], !cachedInfo.isEmpty else {
+      result(FlutterError(
+        code: "NO_DATA_AVAILABLE",
+        message: "Device information not yet received. Please connect to the device first and wait for DIS data to be received via callbacks.",
+        details: nil))
+      return
+    }
+    
+    // Map common DIS characteristic keys to the expected format
+    // The keys are based on Bluetooth DIS (Device Information Service) standard
+    let info: [String: String] = [
+      "firmwareVersion": cachedInfo["firmwareRevision"] ?? cachedInfo["firmware_revision"] ?? "",
+      "hardwareCode": cachedInfo["hardwareCode"] ?? "",
+      "designRevision": cachedInfo["designRevision"] ?? "",
+      "manufactureDate": cachedInfo["manufactureDate"] ?? "",
+      "productionRevision": cachedInfo["productionRevision"] ?? "",
+      "manufacturerName": cachedInfo["manufacturerName"] ?? cachedInfo["manufacturer_name"] ?? "",
+      "batteryDeviceType": cachedInfo["batteryDeviceType"] ?? "",
+      "model": cachedInfo["modelNumber"] ?? cachedInfo["model_number"] ?? "",
+      "serialNumber": cachedInfo["serialNumber"] ?? cachedInfo["serial_number"] ?? "",
+      "pcbRevision": cachedInfo["pcbRevision"] ?? "",
+      "softwareRevision": cachedInfo["softwareRevision"] ?? cachedInfo["software_revision"] ?? "",
+      "hardwareRevision": cachedInfo["hardwareRevision"] ?? cachedInfo["hardware_revision"] ?? ""
+    ]
+    
+    guard let jsonData = try? JSONSerialization.data(withJSONObject: info, options: []),
+          let jsonString = String(data: jsonData, encoding: .utf8) else {
+      result(FlutterError(
+        code: "ENCODING_ERROR",
+        message: "Failed to encode device information",
+        details: nil))
+      return
+    }
+    result(jsonString)
   }
 
   func requestBatteryStatus(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
