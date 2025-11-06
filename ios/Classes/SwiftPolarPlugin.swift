@@ -696,39 +696,52 @@ private func success(_ event: String, data: Any? = nil) {
   public func disInformationReceived(_ identifier: String, uuid: CBUUID, value: String) {
       // Cache the device information for later retrieval
       // Map standard Bluetooth DIS UUIDs to readable keys
-      if deviceInfoCache[identifier] == nil {
-        deviceInfoCache[identifier] = [:]
+      if let key = mapDISUUIDToKey(uuid) {
+        if deviceInfoCache[identifier] == nil {
+          deviceInfoCache[identifier] = [:]
+        }
+        deviceInfoCache[identifier]?[key] = value
+        
+        // Log for debugging
+        print("📱 iOS DIS callback (UUID) - Device: \(identifier), UUID: \(uuid.uuidString), Key: \(key), Value: \(value)")
+      } else {
+        print("📱 iOS DIS callback (UUID) - Skipping UUID \(uuid.uuidString) (binary/unknown data)")
       }
-      
-      let key = mapDISUUIDToKey(uuid)
-      deviceInfoCache[identifier]?[key] = value
-      
-      // Log for debugging
-      print("📱 iOS DIS callback (UUID) - Device: \(identifier), UUID: \(uuid.uuidString), Key: \(key), Value: \(value)")
       
       success(
       "disInformationReceived", data: [identifier, uuid.uuidString, value])
   }
   
-  private func mapDISUUIDToKey(_ uuid: CBUUID) -> String {
+  private func mapDISUUIDToKey(_ uuid: CBUUID) -> String? {
     // Standard Bluetooth DIS (Device Information Service) characteristic UUIDs
-    switch uuid.uuidString.uppercased() {
+    let uuidStr = uuid.uuidString.uppercased()
+    switch uuidStr {
     case "2A29": return "manufacturerName"
     case "2A24": return "modelNumber"
     case "2A25": return "serialNumber"
     case "2A27": return "hardwareRevision"
     case "2A26": return "firmwareRevision"
     case "2A28": return "softwareRevision"
-    case "2A23": return "systemId"
+    case "2A23": return nil  // systemId is binary data, skip it
     case "2A2A": return "regulatoryCertification"
     case "2A50": return "pnpId"
-    default: return uuid.uuidString
+    default: 
+      print("⚠️ iOS Unknown DIS UUID received: \(uuidStr)")
+      return nil  // Skip unknown UUIDs
     }
   }
 
   public func disInformationReceivedWithKeysAsStrings(
     _ identifier: String, key: String, value: String
   ) {
+      // Skip system ID and hex values (binary data that's not useful)
+      let lowercaseKey = key.lowercased()
+      if lowercaseKey.contains("systemid") || lowercaseKey.contains("_hex") {
+        print("📱 iOS DIS callback - Skipping key \(key) (binary/hex data)")
+        success("disInformationReceived", data: [identifier, key, value])
+        return
+      }
+      
       // Cache the device information for later retrieval
       if deviceInfoCache[identifier] == nil {
         deviceInfoCache[identifier] = [:]
@@ -1625,8 +1638,9 @@ private func success(_ event: String, data: Any? = nil) {
     
     // Map common DIS characteristic keys to the expected format
     // The keys are based on Bluetooth DIS (Device Information Service) standard
+    // Note: Many Polar devices use softwareRevision instead of firmwareRevision
     let info: [String: String] = [
-      "firmwareVersion": cachedInfo["firmwareRevision"] ?? cachedInfo["firmware_revision"] ?? "",
+      "firmwareVersion": cachedInfo["softwareRevision"] ?? cachedInfo["firmwareRevision"] ?? cachedInfo["firmware_revision"] ?? cachedInfo["software_revision"] ?? "",
       "hardwareCode": cachedInfo["hardwareCode"] ?? "",
       "designRevision": cachedInfo["designRevision"] ?? "",
       "manufactureDate": cachedInfo["manufactureDate"] ?? "",
