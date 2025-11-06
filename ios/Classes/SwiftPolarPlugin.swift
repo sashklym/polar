@@ -47,6 +47,10 @@ public class SwiftPolarPlugin:
   /// Cache for device information received via DIS callbacks
   /// Key: device identifier, Value: Dictionary of DIS key-value pairs
   var deviceInfoCache = [String: [String: String]]()
+  
+  /// Cache for battery levels received via callbacks
+  /// Key: device identifier, Value: battery level
+  var batteryLevelCache = [String: UInt]()
     
   init(
     messenger: FlutterBinaryMessenger,
@@ -650,13 +654,17 @@ private func success(_ event: String, data: Any? = nil) {
       return
     }
     
-    // Clear cached device information when device disconnects
+    // Clear cached device information and battery level when device disconnects
     deviceInfoCache.removeValue(forKey: polarDeviceInfo.deviceId)
+    batteryLevelCache.removeValue(forKey: polarDeviceInfo.deviceId)
     
     success("deviceDisconnected", data: [data, pairingError])
   }
 
   public func batteryLevelReceived(_ identifier: String, batteryLevel: UInt) {
+    // Cache the battery level for later retrieval
+    batteryLevelCache[identifier] = batteryLevel
+    
     success("batteryLevelReceived", data: [identifier, batteryLevel])
   }
 
@@ -1606,6 +1614,9 @@ private func success(_ event: String, data: Any? = nil) {
     result(jsonString)
   }
 
+  // Note: iOS PolarBleSDK 6.9.0 doesn't have a requestBatteryStatus API like Android.
+  // Instead, we collect battery level from the batteryLevelReceived callbacks
+  // and return the cached data when requested.
   func requestBatteryStatus(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let identifier = call.arguments as? String else {
       result(FlutterError(code: "INVALID_ARGUMENT",
@@ -1614,18 +1625,16 @@ private func success(_ event: String, data: Any? = nil) {
       return
     }
 
-    _ = api.requestBatteryStatus(identifier)
-      .subscribe(
-        onSuccess: { batteryLevel in
-          result(batteryLevel)
-        },
-        onFailure: { error in
-          result(FlutterError(
-            code: "ERROR_REQUESTING_BATTERY_STATUS",
-            message: error.localizedDescription,
-            details: nil))
-        }
-      )
+    // Check if we have cached battery level for this identifier
+    guard let batteryLevel = batteryLevelCache[identifier] else {
+      result(FlutterError(
+        code: "NO_DATA_AVAILABLE",
+        message: "Battery level not yet received. Please connect to the device first and wait for battery data to be received via callbacks.",
+        details: nil))
+      return
+    }
+    
+    result(batteryLevel)
   }
 }
 
