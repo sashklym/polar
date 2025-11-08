@@ -789,9 +789,25 @@ private func success(_ event: String, data: Any? = nil) {
       onSuccess: { dataTypes in
         // Map data types to their respective indices
         let dataTypesIds = dataTypes.compactMap { PolarDeviceDataType.allCases.firstIndex(of: $0) }
-        // Safely convert indices to description strings and return
-        let dataTypesDescriptions = dataTypesIds.map { "\($0)" }
-        result(dataTypesDescriptions)
+        // Encode as JSON string to match Android implementation
+        do {
+          let jsonData = try JSONSerialization.data(withJSONObject: dataTypesIds, options: [])
+          if let jsonString = String(data: jsonData, encoding: .utf8) {
+            result(jsonString)
+          } else {
+            result(
+              FlutterError(
+                code: "ENCODING_ERROR",
+                message: "Failed to convert JSON data to string",
+                details: nil))
+          }
+        } catch {
+          result(
+            FlutterError(
+              code: "ENCODING_ERROR",
+              message: "Failed to encode data types: \(error.localizedDescription)",
+              details: nil))
+        }
       },
       onFailure: { error in
         result(
