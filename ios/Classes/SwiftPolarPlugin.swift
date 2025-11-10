@@ -44,13 +44,57 @@ public class SwiftPolarPlugin:
   var api: PolarBleApi!
   var events: FlutterEventSink?
   
+  /// Serial queue for thread-safe access to caches
+  private let cacheQueue = DispatchQueue(label: "polar.plugin.cache.queue")
+  
   /// Cache for device information received via DIS callbacks
   /// Key: device identifier, Value: Dictionary of DIS key-value pairs
-  var deviceInfoCache = [String: [String: String]]()
+  private var _deviceInfoCache = [String: [String: String]]()
   
   /// Cache for battery levels received via callbacks
   /// Key: device identifier, Value: battery level
-  var batteryLevelCache = [String: UInt]()
+  private var _batteryLevelCache = [String: UInt]()
+  
+  /// Thread-safe access to deviceInfoCache
+  var deviceInfoCache: [String: [String: String]] {
+    get { cacheQueue.sync { _deviceInfoCache } }
+  }
+  
+  /// Thread-safe setter for deviceInfoCache
+  func setDeviceInfo(_ identifier: String, _ key: String, _ value: String) {
+    cacheQueue.async { [weak self] in
+      if self?._deviceInfoCache[identifier] == nil {
+        self?._deviceInfoCache[identifier] = [:]
+      }
+      self?._deviceInfoCache[identifier]?[key] = value
+    }
+  }
+  
+  /// Thread-safe removal from deviceInfoCache
+  func removeDeviceInfo(_ identifier: String) {
+    cacheQueue.async { [weak self] in
+      self?._deviceInfoCache.removeValue(forKey: identifier)
+    }
+  }
+  
+  /// Thread-safe access to batteryLevelCache
+  var batteryLevelCache: [String: UInt] {
+    get { cacheQueue.sync { _batteryLevelCache } }
+  }
+  
+  /// Thread-safe setter for batteryLevelCache
+  func setBatteryLevel(_ identifier: String, _ level: UInt) {
+    cacheQueue.async { [weak self] in
+      self?._batteryLevelCache[identifier] = level
+    }
+  }
+  
+  /// Thread-safe removal from batteryLevelCache
+  func removeBatteryLevel(_ identifier: String) {
+    cacheQueue.async { [weak self] in
+      self?._batteryLevelCache.removeValue(forKey: identifier)
+    }
+  }
     
   init(
     messenger: FlutterBinaryMessenger,
@@ -656,15 +700,15 @@ private func success(_ event: String, data: Any? = nil) {
     }
     
     // Clear cached device information and battery level when device disconnects
-    deviceInfoCache.removeValue(forKey: polarDeviceInfo.deviceId)
-    batteryLevelCache.removeValue(forKey: polarDeviceInfo.deviceId)
+    removeDeviceInfo(polarDeviceInfo.deviceId)
+    removeBatteryLevel(polarDeviceInfo.deviceId)
     
     success("deviceDisconnected", data: [data, pairingError])
   }
 
   public func batteryLevelReceived(_ identifier: String, batteryLevel: UInt) {
     // Cache the battery level for later retrieval
-    batteryLevelCache[identifier] = batteryLevel
+    setBatteryLevel(identifier, batteryLevel)
     
     success("batteryLevelReceived", data: [identifier, batteryLevel])
   }
@@ -697,10 +741,7 @@ private func success(_ event: String, data: Any? = nil) {
       // Cache the device information for later retrieval
       // Map standard Bluetooth DIS UUIDs to readable keys
       if let key = mapDISUUIDToKey(uuid) {
-        if deviceInfoCache[identifier] == nil {
-          deviceInfoCache[identifier] = [:]
-        }
-        deviceInfoCache[identifier]?[key] = value
+        setDeviceInfo(identifier, key, value)
         
         // Log for debugging
         print("📱 iOS DIS callback (UUID) - Device: \(identifier), UUID: \(uuid.uuidString), Key: \(key), Value: \(value)")
@@ -743,10 +784,7 @@ private func success(_ event: String, data: Any? = nil) {
       }
       
       // Cache the device information for later retrieval
-      if deviceInfoCache[identifier] == nil {
-        deviceInfoCache[identifier] = [:]
-      }
-      deviceInfoCache[identifier]?[key] = value
+      setDeviceInfo(identifier, key, value)
       
       // Log for debugging
       print("📱 iOS DIS callback - Device: \(identifier), Key: \(key), Value: \(value)")
@@ -788,7 +826,18 @@ private func success(_ event: String, data: Any? = nil) {
     _ = api.getAvailableOfflineRecordingDataTypes(identifier).subscribe(
       onSuccess: { dataTypes in
         // Map data types to their respective indices
-        let dataTypesIds = dataTypes.compactMap { PolarDeviceDataType.allCases.firstIndex(of: $0) }
+        let dataTypesIds = dataTypes.compactMap { dataType -> Int? in
+          guard let index = PolarDeviceDataType.allCases.firstIndex(of: dataType) else {
+            print("⚠️ iOS Unknown data type received: \(dataType), skipping")
+            return nil
+          }
+          // Validate index is within valid range
+          guard index < PolarDeviceDataType.allCases.count else {
+            print("⚠️ iOS Invalid index \(index) for data type: \(dataType), skipping")
+            return nil
+          }
+          return index
+        }
         // Encode as JSON string to match Android implementation
         do {
           let jsonData = try JSONSerialization.data(withJSONObject: dataTypesIds, options: [])
