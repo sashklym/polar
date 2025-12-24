@@ -175,7 +175,7 @@ PolarTemperatureSample _$PolarTemperatureSampleFromJson(
     PolarTemperatureSample(
       timeStamp: const PolarSampleTimestampConverter()
           .fromJson((json['timeStamp'] as num).toInt()),
-      temperature: (json['temperature'] as num).toDouble(),
+      temperature: (json['temperature'] as num?)?.toDouble(),
     );
 
 Map<String, dynamic> _$PolarTemperatureSampleToJson(

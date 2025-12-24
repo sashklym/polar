@@ -331,12 +331,12 @@ class PolarTemperatureSample {
   final DateTime timeStamp;
 
   /// temperature value in celsius
-  final double temperature;
+  final double? temperature;
 
   /// Constructor
   PolarTemperatureSample({
     required this.timeStamp,
-    required this.temperature,
+    this.temperature,
   });
 
   /// From json

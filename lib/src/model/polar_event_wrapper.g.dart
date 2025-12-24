@@ -30,4 +30,5 @@ const _$PolarEventEnumMap = {
   PolarEvent.batteryLevelReceived: 'batteryLevelReceived',
   PolarEvent.batteryChargingStatusReceived: 'batteryChargingStatusReceived',
   PolarEvent.powerSourcesStateReceived: 'powerSourcesStateReceived',
+  PolarEvent.firmwareUpdateProgress: 'firmwareUpdateProgress',
 };

@@ -1486,58 +1486,86 @@ class PolarPlugin :
             .discard()
     }
 
+    // Note: Android PolarBleSDK doesn't have a requestDeviceInformation API.
+    // Instead, we cache device information from the disInformationReceived callbacks
+    // and return the cached data when requested.
     private fun requestDeviceInformation(call: MethodCall, result: Result) {
         val identifier = call.arguments as? String ?: run {
             result.error("INVALID_ARGUMENT", "Expected a device identifier as a String", null)
             return
         }
 
-        wrapper.api
-            .requestDeviceInformation(identifier)
-            .subscribe({ deviceInfo ->
-                runOnUiThread {
-                    val info = mapOf(
-                        "firmwareVersion" to deviceInfo.firmwareVersion,
-                        "hardwareCode" to deviceInfo.hardwareCode,
-                        "designRevision" to deviceInfo.designRevision,
-                        "manufactureDate" to deviceInfo.manufactureDate,
-                        "productionRevision" to deviceInfo.productionRevision,
-                        "manufacturerName" to deviceInfo.manufacturerName,
-                        "batteryDeviceType" to deviceInfo.batteryDeviceType,
-                        "model" to deviceInfo.model,
-                        "serialNumber" to deviceInfo.serialNumber,
-                        "pcbRevision" to deviceInfo.pcbRevision,
-                        "softwareRevision" to deviceInfo.softwareRevision,
-                        "hardwareRevision" to deviceInfo.hardwareRevision
-                    )
-                    result.success(gson.toJson(info))
-                }
-            }, { error ->
-                runOnUiThread {
-                    result.error("ERROR_REQUESTING_DEVICE_INFO", error.message, null)
-                }
-            })
-            .discard()
+        // Get cached info, or use empty map if not available yet
+        val cachedInfo = wrapper.deviceInfoCache[identifier] ?: mapOf()
+        
+        // Map DIS UUIDs and keys to the expected format
+        // Common DIS characteristic UUIDs:
+        // 00002a26-0000-1000-8000-00805f9b34fb = Firmware Revision String
+        // 00002a28-0000-1000-8000-00805f9b34fb = Software Revision String  
+        // 00002a27-0000-1000-8000-00805f9b34fb = Hardware Revision String
+        // 00002a29-0000-1000-8000-00805f9b34fb = Manufacturer Name String
+        // 00002a24-0000-1000-8000-00805f9b34fb = Model Number String
+        // 00002a25-0000-1000-8000-00805f9b34fb = Serial Number String
+        
+        val info = mapOf(
+            "firmwareVersion" to (cachedInfo["00002a26-0000-1000-8000-00805f9b34fb"] 
+                ?: cachedInfo["firmwareRevision"] 
+                ?: cachedInfo["softwareRevision"]
+                ?: cachedInfo["00002a28-0000-1000-8000-00805f9b34fb"] 
+                ?: ""),
+            "hardwareCode" to (cachedInfo["hardwareCode"] ?: ""),
+            "designRevision" to (cachedInfo["designRevision"] ?: ""),
+            "manufactureDate" to (cachedInfo["manufactureDate"] ?: ""),
+            "productionRevision" to (cachedInfo["productionRevision"] ?: ""),
+            "manufacturerName" to (cachedInfo["00002a29-0000-1000-8000-00805f9b34fb"] 
+                ?: cachedInfo["manufacturerName"] 
+                ?: ""),
+            "batteryDeviceType" to (cachedInfo["batteryDeviceType"] ?: ""),
+            "model" to (cachedInfo["00002a24-0000-1000-8000-00805f9b34fb"] 
+                ?: cachedInfo["modelNumber"] 
+                ?: ""),
+            "serialNumber" to (cachedInfo["00002a25-0000-1000-8000-00805f9b34fb"] 
+                ?: cachedInfo["serialNumber"] 
+                ?: ""),
+            "pcbRevision" to (cachedInfo["pcbRevision"] ?: ""),
+            "softwareRevision" to (cachedInfo["00002a28-0000-1000-8000-00805f9b34fb"] 
+                ?: cachedInfo["softwareRevision"] 
+                ?: ""),
+            "hardwareRevision" to (cachedInfo["00002a27-0000-1000-8000-00805f9b34fb"] 
+                ?: cachedInfo["hardwareRevision"] 
+                ?: "")
+        )
+        
+        runOnUiThread {
+            result.success(gson.toJson(info))
+        }
     }
 
+    // Note: Android PolarBleSDK doesn't have a requestBatteryStatus API.
+    // Instead, we cache battery level from the batteryLevelReceived callbacks
+    // and return the cached data when requested.
     private fun requestBatteryStatus(call: MethodCall, result: Result) {
         val identifier = call.arguments as? String ?: run {
             result.error("INVALID_ARGUMENT", "Expected a device identifier as a String", null)
             return
         }
 
-        wrapper.api
-            .requestBatteryStatus(identifier)
-            .subscribe({ batteryLevel ->
-                runOnUiThread {
-                    result.success(batteryLevel)
-                }
-            }, { error ->
-                runOnUiThread {
-                    result.error("ERROR_REQUESTING_BATTERY_STATUS", error.message, null)
-                }
-            })
-            .discard()
+        // Check if we have cached battery level for this identifier
+        val batteryLevel = wrapper.batteryLevelCache[identifier]
+        
+        if (batteryLevel != null) {
+            runOnUiThread {
+                result.success(batteryLevel)
+            }
+        } else {
+            runOnUiThread {
+                result.error(
+                    "NO_DATA_AVAILABLE",
+                    "Battery level not yet received. Please connect to the device first and wait for battery data to be received via callbacks.",
+                    null
+                )
+            }
+        }
     }
     }
 
@@ -1549,6 +1577,8 @@ class PolarWrapper(
             PolarBleSdkFeature.values().toSet(),
         ),
     private val sinks: MutableMap<Int, EventSink> = mutableMapOf(),
+    private val deviceInfoCache: MutableMap<String, MutableMap<String, String>> = mutableMapOf(),
+    private val batteryLevelCache: MutableMap<String, Int> = mutableMapOf(),
 ) : PolarBleApiCallbackProvider {
     init {
         api.setApiCallback(this)
@@ -1615,6 +1645,10 @@ class PolarWrapper(
         uuid: UUID,
         value: String,
     ) {
+        // Cache device information
+        val cache = deviceInfoCache.getOrPut(identifier) { mutableMapOf() }
+        cache[uuid.toString()] = value
+        
         success("disInformationReceived", listOf(identifier, uuid.toString(), value))
     }
 
@@ -1622,6 +1656,10 @@ class PolarWrapper(
         identifier: String,
         disInfo: DisInfo,
     ) {
+        // Cache device information using DisInfo
+        val cache = deviceInfoCache.getOrPut(identifier) { mutableMapOf() }
+        cache[disInfo.key] = disInfo.value
+        
         success("disInformationReceived", listOf(identifier, disInfo.key, disInfo.value))
     }
 
@@ -1629,6 +1667,9 @@ class PolarWrapper(
         identifier: String,
         level: Int,
     ) {
+        // Cache battery level
+        batteryLevelCache[identifier] = level
+        
         success("batteryLevelReceived", listOf(identifier, level))
     }
 
