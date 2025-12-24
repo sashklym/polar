@@ -44,14 +44,13 @@ class Polar {
       .map((e) => e.data);
 
   /// feature ready callback
-  Stream<PolarSdkFeatureReadyEvent> get sdkFeatureReady => _eventStream
-      .where((e) => e.event == PolarEvent.sdkFeatureReady)
-      .map(
-        (e) => PolarSdkFeatureReadyEvent(
-          e.data[0],
-          PolarSdkFeature.fromJson(e.data[1]),
-        ),
-      );
+  Stream<PolarSdkFeatureReadyEvent> get sdkFeatureReady =>
+      _eventStream.where((e) => e.event == PolarEvent.sdkFeatureReady).map(
+            (e) => PolarSdkFeatureReadyEvent(
+              e.data[0],
+              PolarSdkFeature.fromJson(e.data[1]),
+            ),
+          );
 
   /// Device connection has been established.
   ///
@@ -71,14 +70,13 @@ class Polar {
   /// If PolarBleApi#disconnectFromPolarDevice is not called, a new connection attempt is dispatched automatically.
   ///
   /// - Parameter identifier: Polar device info
-  Stream<PolarDeviceDisconnectedEvent> get deviceDisconnected => _eventStream
-      .where((e) => e.event == PolarEvent.deviceDisconnected)
-      .map(
-        (e) => PolarDeviceDisconnectedEvent(
-          PolarDeviceInfo.fromJson(jsonDecode(e.data[0])),
-          e.data[1],
-        ),
-      );
+  Stream<PolarDeviceDisconnectedEvent> get deviceDisconnected =>
+      _eventStream.where((e) => e.event == PolarEvent.deviceDisconnected).map(
+            (e) => PolarDeviceDisconnectedEvent(
+              PolarDeviceInfo.fromJson(jsonDecode(e.data[0])),
+              e.data[1],
+            ),
+          );
 
   ///  Received DIS info.
   ///
@@ -128,8 +126,8 @@ class Polar {
   ///  - onNext: for every new polar device found
   Stream<PolarDeviceInfo> searchForDevice() {
     return _searchChannel.receiveBroadcastStream().map(
-      (event) => PolarDeviceInfo.fromJson(jsonDecode(event)),
-    );
+          (event) => PolarDeviceInfo.fromJson(jsonDecode(event)),
+        );
   }
 
   /// Request a connection to a Polar device. Invokes `PolarBleApiObservers` polarDeviceConnected.
@@ -967,11 +965,14 @@ class Polar {
     PolarStoredDataTypeEnum dataType,
     DateTime until,
   ) async {
-    await _methodChannel.invokeMethod<void>('deleteStoredDeviceData', [
-      identifier,
-      dataType.toInt(),
-      DateFormat('yyyy-MM-dd').format(until),
-    ]);
+    await _methodChannel.invokeMethod<void>(
+      'deleteStoredDeviceData',
+      [
+        identifier,
+        dataType.toJson(),
+        DateFormat('yyyy-MM-dd').format(until),
+      ],
+    );
   }
 
   /// Deletes device date folders between two dates.
