@@ -1,40 +1,48 @@
+import 'dart:io';
+
 /// Represents the types of data that can be stored on a Polar device.
+/// Order must match iOS PolarStoredDataType.StoredDataType enum
 enum PolarStoredDataType {
-  /// Heart rate data
-  hr,
+  /// Undefined data type
+  undefined,
 
-  /// ECG data
-  ecg,
+  /// Activity data
+  activity,
 
-  /// Accelerometer data
-  acc,
+  /// Auto sample data
+  autoSample,
 
-  /// PPG data
-  ppg,
+  /// Daily summary data
+  dailySummary,
 
-  /// PPI data
-  ppi,
+  /// Nightly recovery data
+  nightlyRecovery,
 
-  /// Gyroscope data
-  gyro,
+  /// SD logs data
+  sdlogs,
 
-  /// Magnetometer data
-  magnetometer,
+  /// Sleep data
+  sleep,
 
-  /// Temperature data
-  temperature,
+  /// Sleep score data
+  sleepScore,
 
-  /// Pressure data
-  pressure,
-
-  /// Location data
-  location,
+  /// Skin contact changes data
+  skinContactChanges,
 
   /// Skin temperature data
-  skinTemperature;
+  skintemp;
 
-  /// Converts this enum to a JSON string.
-  String toJson() => name;
+  /// Converts this enum to JSON format for use with the native API.
+  /// - iOS: Returns the enum index as an integer
+  /// - Android: Returns the enum name as a string
+  dynamic toJson() {
+    if (Platform.isIOS) {
+      return index;
+    } else {
+      return name;
+    }
+  }
 
   /// Creates a [PolarStoredDataType] from a JSON string.
   static PolarStoredDataType fromJson(String json) {

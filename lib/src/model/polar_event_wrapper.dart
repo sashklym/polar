@@ -51,6 +51,12 @@ enum PolarEvent {
   /// Power sources state received
   powerSourcesStateReceived,
 
-  /// Firmware update progress
-  firmwareUpdateProgress,
+  /// Firmware update check status received
+  firmwareUpdateCheckStatusReceived,
+
+  /// Firmware update status received
+  firmwareUpdateStatusReceived,
+
+  /// SDK features readiness (all features evaluated at once)
+  sdkFeaturesReadiness,
 }

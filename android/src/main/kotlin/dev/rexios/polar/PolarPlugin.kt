@@ -1,11 +1,8 @@
 package dev.rexios.polar
 
-import android.annotation.TargetApi
 import android.content.Context
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import androidx.annotation.RequiresApi
 import androidx.lifecycle.Lifecycle.Event
 import androidx.lifecycle.LifecycleEventObserver
 import com.google.gson.GsonBuilder
@@ -18,6 +15,7 @@ import com.google.gson.JsonSerializer
 import com.polar.androidcommunications.api.ble.model.DisInfo
 import com.polar.androidcommunications.api.ble.model.gatt.client.ChargeState
 import com.polar.androidcommunications.api.ble.model.gatt.client.PowerSourcesState
+import com.polar.androidcommunications.api.ble.exceptions.BleDisconnected
 import com.polar.sdk.api.PolarBleApi
 import com.polar.sdk.api.PolarBleApi.PolarBleSdkFeature
 import com.polar.sdk.api.PolarBleApi.PolarDeviceDataType
@@ -25,6 +23,8 @@ import com.polar.sdk.api.PolarBleApiCallbackProvider
 import com.polar.sdk.api.PolarBleApiDefaultImpl
 import com.polar.sdk.api.PolarH10OfflineExerciseApi.RecordingInterval
 import com.polar.sdk.api.PolarH10OfflineExerciseApi.SampleType
+import com.polar.sdk.api.model.CheckFirmwareUpdateStatus
+import com.polar.sdk.api.model.FirmwareUpdateStatus
 import com.polar.sdk.api.model.LedConfig
 import com.polar.sdk.api.model.PolarDeviceInfo
 import com.polar.sdk.api.model.PolarExerciseEntry
@@ -32,9 +32,9 @@ import com.polar.sdk.api.model.PolarFirstTimeUseConfig
 import com.polar.sdk.api.model.PolarHealthThermometerData
 import com.polar.sdk.api.model.PolarHrData
 import com.polar.sdk.api.model.PolarOfflineRecordingEntry
+import com.polar.sdk.api.model.PolarOfflineRecordingTrigger
+import com.polar.sdk.api.model.PolarOfflineRecordingTriggerMode
 import com.polar.sdk.api.model.PolarSensorSetting
-import com.polar.sdk.api.model.CheckFirmwareUpdateStatus
-import com.polar.sdk.api.model.FirmwareUpdateStatus
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -48,16 +48,12 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.reactivex.rxjava3.disposables.Disposable
 import java.lang.reflect.Type
-import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Date
-import java.util.Locale
 import java.util.UUID
-
-fun Any?.discard() = Unit
 
 object DateSerializer : JsonDeserializer<Date>, JsonSerializer<Date> {
     override fun deserialize(
@@ -77,7 +73,30 @@ private fun runOnUiThread(runnable: () -> Unit) {
     Handler(Looper.getMainLooper()).post { runnable() }
 }
 
-private val gson = GsonBuilder().registerTypeAdapter(Date::class.java, DateSerializer).create()
+private val gson = GsonBuilder()
+    .registerTypeAdapter(Date::class.java, DateSerializer)
+    .create()
+
+private fun PolarOfflineRecordingEntry.toJsonString(): String {
+    val millis = date.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    return """{"path":"$path","size":$size,"date":$millis,"type":"${type.name}"}"""
+}
+
+private fun offlineEntryFromJson(json: String): PolarOfflineRecordingEntry {
+    val map = gson.fromJson(json, Map::class.java)
+    val dateValue = map["date"]
+    val dateTime = when (dateValue) {
+        is Number -> java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(dateValue.toLong()), ZoneId.systemDefault())
+        is String -> java.time.LocalDateTime.parse(dateValue, java.time.format.DateTimeFormatter.ISO_DATE_TIME)
+        else -> throw IllegalArgumentException("Unexpected date format: $dateValue")
+    }
+    return PolarOfflineRecordingEntry(
+        path = map["path"] as String,
+        size = (map["size"] as Number).toLong(),
+        date = dateTime,
+        type = PolarDeviceDataType.valueOf(map["type"] as String),
+    )
+}
 
 private var wrapperInternal: PolarWrapper? = null
 private val wrapper: PolarWrapper
@@ -136,7 +155,6 @@ class PolarPlugin :
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onMethodCall(
         call: MethodCall,
         result: Result,
@@ -145,13 +163,31 @@ class PolarPlugin :
 
         when (call.method) {
             "connectToDevice" -> {
-                wrapper.api.connectToDevice(call.arguments as String)
-                result.success(null)
+                try {
+                    val identifier = call.arguments as String
+                    android.util.Log.d("PolarPlugin", "connectToDevice: identifier=$identifier")
+                    wrapper.api.connectToDevice(identifier)
+                    result.success(null)
+                } catch (e: Exception) {
+                    android.util.Log.e("PolarPlugin", "connectToDevice error: ${e.message}", e)
+                    runOnUiThread {
+                        result.error("CONNECT_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
             }
 
             "disconnectFromDevice" -> {
-                wrapper.api.disconnectFromDevice(call.arguments as String)
-                result.success(null)
+                try {
+                    val identifier = call.arguments as String
+                    android.util.Log.d("PolarPlugin", "disconnectFromDevice: identifier=$identifier")
+                    wrapper.api.disconnectFromDevice(identifier)
+                    result.success(null)
+                } catch (e: Exception) {
+                    android.util.Log.e("PolarPlugin", "disconnectFromDevice error: ${e.message}", e)
+                    runOnUiThread {
+                        result.error("DISCONNECT_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
             }
 
             "getAvailableOnlineStreamDataTypes" -> getAvailableOnlineStreamDataTypes(call, result)
@@ -170,6 +206,7 @@ class PolarPlugin :
             "updateFirmware" -> updateFirmware(call, result)
             "enableSdkMode" -> enableSdkMode(call, result)
             "disableSdkMode" -> disableSdkMode(call, result)
+            "setAutomaticOHRMeasurementEnabled" -> setAutomaticOHRMeasurementEnabled(call, result)
             "isSdkModeEnabled" -> isSdkModeEnabled(call, result)
             "getAvailableOfflineRecordingDataTypes" -> getAvailableOfflineRecordingDataTypes(
                 call,
@@ -179,9 +216,11 @@ class PolarPlugin :
             "startOfflineRecording" -> startOfflineRecording(call, result)
             "stopOfflineRecording" -> stopOfflineRecording(call, result)
             "getOfflineRecordingStatus" -> getOfflineRecordingStatus(call, result)
+            "setOfflineRecordingTrigger" -> setOfflineRecordingTrigger(call, result)
             "listOfflineRecordings" -> listOfflineRecordings(call, result)
             "getOfflineRecord" -> getOfflineRecord(call, result)
             "removeOfflineRecord" -> removeOfflineRecord(call, result)
+            "getChargerState" -> getChargerState(call, result)
             "getDiskSpace" -> getDiskSpace(call, result)
             "getLocalTime" -> getLocalTime(call, result)
             "setLocalTime" -> setLocalTime(call, result)
@@ -206,11 +245,15 @@ class PolarPlugin :
         events: EventSink,
     ) {
         initApi()
-        wrapper.addSink(arguments as Int, events)
+        val id = arguments as Int
+        android.util.Log.d("PolarPlugin", "onListen: id=$id, registering event sink")
+        wrapper.addSink(id, events)
     }
 
     override fun onCancel(arguments: Any?) {
-        wrapper.removeSink(arguments as Int)
+        val id = arguments as Int
+        android.util.Log.d("PolarPlugin", "onCancel: id=$id, canceling event sink")
+        wrapper.removeSink(id)
     }
 
     private val searchHandler =
@@ -296,7 +339,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun requestStreamSettings(
@@ -316,7 +359,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun startRecording(
@@ -338,7 +381,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun stopRecording(
@@ -356,7 +399,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun requestRecordingStatus(
@@ -374,7 +417,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun listExercises(
@@ -395,7 +438,7 @@ class PolarPlugin :
             }, {
                 result.success(exercises)
             })
-            .discard()
+            
     }
 
     private fun fetchExercise(
@@ -415,7 +458,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun removeExercise(
@@ -435,7 +478,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun setLedConfig(
@@ -455,7 +498,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun doFactoryReset(
@@ -473,7 +516,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun doRestart(
@@ -490,111 +533,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
-    }
-
-    private fun checkFirmwareUpdate(
-        call: MethodCall,
-        result: Result,
-    ) {
-        val identifier = call.arguments as String
-        wrapper.api
-            .checkFirmwareUpdate(identifier)
-            .subscribe({ status ->
-                val response = when (status) {
-                    is CheckFirmwareUpdateStatus.CheckFwUpdateAvailable -> mapOf(
-                        "isUpdateAvailable" to true,
-                        "currentVersion" to "",
-                        "availableVersion" to status.version
-                    )
-                    is CheckFirmwareUpdateStatus.CheckFwUpdateNotAvailable -> mapOf(
-                        "isUpdateAvailable" to false,
-                        "currentVersion" to status.details,
-                        "availableVersion" to null
-                    )
-                    is CheckFirmwareUpdateStatus.CheckFwUpdateFailed -> {
-                        runOnUiThread {
-                            result.error("CHECK_FW_UPDATE_FAILED", status.details, null)
-                        }
-                        return@subscribe
-                    }
-                }
-                runOnUiThread { result.success(gson.toJson(response)) }
-            }, {
-                runOnUiThread {
-                    result.error(it.toString(), it.message, null)
-                }
-            })
-            .discard()
-    }
-
-    private fun updateFirmware(
-        call: MethodCall,
-        result: Result,
-    ) {
-        val identifier = call.arguments as String
-        var resultSent = false
-        wrapper.api
-            .updateFirmware(identifier)
-            .subscribe({ status ->
-                // Map status to progress and emit progress events
-                val (progressPercentage, statusMessage, isCompleted) = mapFirmwareStatus(status)
-                val progressData = mapOf(
-                    "identifier" to identifier,
-                    "progressPercentage" to progressPercentage,
-                    "status" to statusMessage,
-                    "isCompleted" to isCompleted
-                )
-                wrapper.success("firmwareUpdateProgress", progressData)
-                
-                // Handle completion
-                when (status) {
-                    is FirmwareUpdateStatus.FwUpdateCompletedSuccessfully -> {
-                        if (!resultSent) {
-                            resultSent = true
-                            runOnUiThread { result.success(null) }
-                        }
-                    }
-                    is FirmwareUpdateStatus.FwUpdateFailed -> {
-                        if (!resultSent) {
-                            resultSent = true
-                            runOnUiThread {
-                                result.error("FW_UPDATE_FAILED", status.details, null)
-                            }
-                        }
-                    }
-                    is FirmwareUpdateStatus.FwUpdateNotAvailable -> {
-                        if (!resultSent) {
-                            resultSent = true
-                            runOnUiThread {
-                                result.error("FW_UPDATE_NOT_AVAILABLE", status.details, null)
-                            }
-                        }
-                    }
-                    else -> {
-                        // Other statuses are progress updates
-                    }
-                }
-            }, {
-                if (!resultSent) {
-                    runOnUiThread {
-                        result.error(it.toString(), it.message, null)
-                    }
-                }
-            })
-            .discard()
-    }
-    
-    private fun mapFirmwareStatus(status: FirmwareUpdateStatus): Triple<Int, String, Boolean> {
-        return when (status) {
-            is FirmwareUpdateStatus.FetchingFwUpdatePackage -> Triple(10, "Fetching firmware package: ${status.details}", false)
-            is FirmwareUpdateStatus.PreparingDeviceForFwUpdate -> Triple(30, "Preparing device: ${status.details}", false)
-            is FirmwareUpdateStatus.WritingFwUpdatePackage -> Triple(60, "Writing firmware: ${status.details}", false)
-            is FirmwareUpdateStatus.FinalizingFwUpdate -> Triple(90, "Finalizing update: ${status.details}", false)
-            is FirmwareUpdateStatus.FwUpdateCompletedSuccessfully -> Triple(100, "Update completed: ${status.details}", true)
-            is FirmwareUpdateStatus.FwUpdateNotAvailable -> Triple(0, "Update not available: ${status.details}", false)
-            is FirmwareUpdateStatus.FwUpdateFailed -> Triple(0, "Update failed: ${status.details}", false)
-        }
+            
     }
 
     private fun enableSdkMode(
@@ -611,7 +550,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun disableSdkMode(
@@ -628,7 +567,25 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
+    }
+
+    private fun setAutomaticOHRMeasurementEnabled(
+        call: MethodCall,
+        result: Result,
+    ) {
+        val args = call.arguments as List<*>
+        val identifier = args[0] as String
+        val enabled = args[1] as Boolean
+        wrapper.api
+            .setAutomaticOHRMeasurementEnabled(identifier, enabled)
+            .subscribe({
+                runOnUiThread { result.success(null) }
+            }, {
+                runOnUiThread {
+                    result.error(it.toString(), it.message, null)
+                }
+            })
     }
 
     private fun isSdkModeEnabled(
@@ -645,7 +602,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun getAvailableOfflineRecordingDataTypes(call: MethodCall, result: Result) {
@@ -660,7 +617,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun requestOfflineRecordingSettings(call: MethodCall, result: Result) {
@@ -677,7 +634,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun startOfflineRecording(call: MethodCall, result: Result) {
@@ -695,7 +652,7 @@ class PolarPlugin :
                     result.error("ERROR_STARTING_RECORDING", it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun stopOfflineRecording(call: MethodCall, result: Result) {
@@ -712,7 +669,7 @@ class PolarPlugin :
                     result.error("ERROR_STOPPING_RECORDING", it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun getOfflineRecordingStatus(call: MethodCall, result: Result) {
@@ -729,7 +686,38 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+
+    }
+
+    private fun setOfflineRecordingTrigger(call: MethodCall, result: Result) {
+        val arguments = call.arguments as List<*>
+        val identifier = arguments[0] as String
+        val modeIndex = arguments[1] as Int
+        @Suppress("UNCHECKED_CAST")
+        val featuresList = arguments[2] as List<List<Any?>>
+
+        val mode = PolarOfflineRecordingTriggerMode.values()[modeIndex]
+
+        val triggerFeatures = mutableMapOf<PolarDeviceDataType, PolarSensorSetting?>()
+        for (entry in featuresList) {
+            val feature = gson.fromJson(entry[0] as String, PolarDeviceDataType::class.java)
+            val settings = (entry[1] as String?)?.let {
+                gson.fromJson(it, PolarSensorSetting::class.java)
+            }
+            triggerFeatures[feature] = settings
+        }
+
+        val trigger = PolarOfflineRecordingTrigger(mode, triggerFeatures)
+
+        wrapper.api
+            .setOfflineRecordingTrigger(identifier, trigger, null)
+            .subscribe({
+                runOnUiThread { result.success(null) }
+            }, {
+                runOnUiThread {
+                    result.error("ERROR_SETTING_TRIGGER", it.message, null)
+                }
+            })
     }
 
     private fun listOfflineRecordings(call: MethodCall, result: Result) {
@@ -739,7 +727,7 @@ class PolarPlugin :
         wrapper.api
             .listOfflineRecordings(identifier)
             .subscribe({
-                recordings.add(gson.toJson(it))
+                recordings.add(it.toJsonString())
             }, {
                 runOnUiThread {
                     result.error(it.toString(), it.message, null)
@@ -747,30 +735,31 @@ class PolarPlugin :
             }, {
                 result.success(recordings)
             })
-            .discard()
+            
     }
 
     private fun getOfflineRecord(call: MethodCall, result: Result) {
         val arguments = call.arguments as List<*>
         val identifier = arguments[0] as String
-        val entry = gson.fromJson(arguments[1] as String, PolarOfflineRecordingEntry::class.java)
+        val entry = offlineEntryFromJson(arguments[1] as String)
 
         wrapper.api
             .getOfflineRecord(identifier, entry)
             .subscribe({
-                runOnUiThread { result.success(gson.toJson(it)) }
+                val json = gson.toJson(it)
+                runOnUiThread { result.success(json) }
             }, {
                 runOnUiThread {
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+
     }
 
     private fun removeOfflineRecord(call: MethodCall, result: Result) {
         val arguments = call.arguments as List<*>
         val identifier = arguments[0] as String
-        val entry = gson.fromJson(arguments[1] as String, PolarOfflineRecordingEntry::class.java)
+        val entry = offlineEntryFromJson(arguments[1] as String)
 
         wrapper.api
             .removeOfflineRecord(identifier, entry)
@@ -781,7 +770,21 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
+    }
+
+    private fun getChargerState(call: MethodCall, result: Result) {
+        val identifier = call.arguments as String
+        try {
+            val chargeState = wrapper.api.getChargerState(identifier)
+            runOnUiThread {
+                result.success(chargeState.name)
+            }
+        } catch (e: Exception) {
+            runOnUiThread {
+                result.error("GET_CHARGER_STATE_ERROR", e.message, null)
+            }
+        }
     }
 
     private fun getDiskSpace(call: MethodCall, result: Result) {
@@ -799,7 +802,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun getLocalTime(call: MethodCall, result: Result) {
@@ -812,15 +815,8 @@ class PolarPlugin :
             .getLocalTime(identifier)
             .subscribe({ deviceTime ->
                 try {
-                    // Format the device time using SimpleDateFormat
-                    val dateFormat = java.text.SimpleDateFormat(
-                        "yyyy-MM-dd'T'HH:mm:ssXXX",
-                        java.util.Locale.getDefault()
-                    )
-                    dateFormat.timeZone = deviceTime.timeZone
-                    val timeString = dateFormat.format(deviceTime.time)
+                    val timeString = deviceTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
 
-                    // Return the formatted date as a string
                     runOnUiThread {
                         result.success(timeString)
                     }
@@ -834,7 +830,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun setLocalTime(call: MethodCall, result: Result) {
@@ -842,17 +838,12 @@ class PolarPlugin :
         val identifier = arguments[0] as String
         val timestamp = arguments[1] as Double
 
-        // Convert the timestamp to a Date object
-        val date =
-            java.util.Date((timestamp * 1000).toLong()) // Multiply by 1000 to convert seconds to milliseconds
+        // Convert the timestamp to LocalDateTime
+        val instant = java.time.Instant.ofEpochMilli((timestamp * 1000).toLong())
+        val localDateTime = java.time.LocalDateTime.ofInstant(instant, ZoneId.systemDefault())
 
-        // Convert Date to Calendar
-        val calendar = java.util.Calendar.getInstance()
-        calendar.time = date
-
-        // Now, call the API with Calendar
         wrapper.api
-            .setLocalTime(identifier, calendar)
+            .setLocalTime(identifier, localDateTime)
             .subscribe({
                 runOnUiThread { result.success(null) }
             }, {
@@ -860,7 +851,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun doFirstTimeUse(call: MethodCall, result: Result) {
@@ -904,7 +895,7 @@ class PolarPlugin :
         }
 
         // Parse birth date
-        val birthDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(birthDateString)
+        val birthDate = java.time.LocalDate.parse(birthDateString)
 
         // Map gender string to PolarFirstTimeUseConfig.Gender enum
         val genderEnum = when (gender) {
@@ -946,7 +937,7 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun isFtuDone(call: MethodCall, result: Result) {
@@ -964,19 +955,19 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private fun deleteStoredDeviceData(call: MethodCall, result: Result) {
         val arguments = call.arguments as List<*>
         val identifier = arguments[0] as String
         
         // Map Dart enum name to Kotlin enum
-        // Dart: activity, autoSample, dailySummary, nightlyRecovery, sdlogs, sleep, sleepScore, skinContactChanges, skintemp
+        // Dart: undefined, activity, autoSample, dailySummary, nightlyRecovery, sdlogs, sleep, sleepScore, skinContactChanges, skintemp
         // Kotlin: ACTIVITY, AUTO_SAMPLE, DAILY_SUMMARY, NIGHTLY_RECOVERY, SDLOGS, SLEEP, SLEEP_SCORE, SKIN_CONTACT_CHANGES, SKIN_TEMP
         val dataTypeName = arguments[1] as String
         val dataType: PolarBleApi.PolarStoredDataType = when (dataTypeName) {
+            "undefined" -> throw IllegalArgumentException("Cannot delete undefined data type")
             "activity" -> PolarBleApi.PolarStoredDataType.ACTIVITY
             "autoSample" -> PolarBleApi.PolarStoredDataType.AUTO_SAMPLE
             "dailySummary" -> PolarBleApi.PolarStoredDataType.DAILY_SUMMARY
@@ -989,10 +980,7 @@ class PolarPlugin :
             else -> throw IllegalArgumentException("Invalid PolarStoredDataType: $dataTypeName")
         }
         
-        val until = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(arguments[2] as String)
-            .toInstant()
-            .atZone(ZoneId.systemDefault())
-            .toLocalDate()
+        val until = LocalDate.parse(arguments[2] as String)
 
         wrapper.api
             .deleteStoredDeviceData(identifier, dataType, until)
@@ -1003,21 +991,14 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private fun deleteDeviceDateFolders(call: MethodCall, result: Result) {
         val arguments = call.arguments as List<*>
         val identifier = arguments[0] as String
-        val fromDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(arguments[1] as String)
-            .toInstant()
-            .atZone(ZoneId.systemDefault())
-            .toLocalDate()
-        val toDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(arguments[2] as String)
-            .toInstant()
-            .atZone(ZoneId.systemDefault())
-            .toLocalDate()
+        val fromDate = LocalDate.parse(arguments[1] as String)
+        val toDate = LocalDate.parse(arguments[2] as String)
 
         wrapper.api
             .deleteDeviceDateFolders(identifier, fromDate, toDate)
@@ -1028,10 +1009,9 @@ class PolarPlugin :
                     result.error(it.toString(), it.message, null)
                 }
             })
-            .discard()
+            
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun getSteps(call: MethodCall, result: Result) {
         try {
             android.util.Log.d("PolarPlugin", "getSteps called with arguments: ${call.arguments}")
@@ -1072,18 +1052,8 @@ class PolarPlugin :
             
             android.util.Log.d("PolarPlugin", "Parsing dates: fromDate=$fromDateString, toDate=$toDateString")
             
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val fromDateParsed = dateFormat.parse(fromDateString)
-            val toDateParsed = dateFormat.parse(toDateString)
-            
-            if (fromDateParsed == null || toDateParsed == null) {
-                android.util.Log.e("PolarPlugin", "Failed to parse dates: fromDate=$fromDateParsed, toDate=$toDateParsed")
-                result.error("INVALID_DATE_FORMAT", "Could not parse date strings", null)
-                return
-            }
-            
-            val fromDate = fromDateParsed.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
-            val toDate = toDateParsed.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
+            val fromDate = LocalDate.parse(fromDateString)
+            val toDate = LocalDate.parse(toDateString)
             
             android.util.Log.d("PolarPlugin", "Calling Polar API getSteps with identifier=$identifier, fromDate=$fromDate, toDate=$toDate")
             
@@ -1122,14 +1092,13 @@ class PolarPlugin :
                         result.error("GET_STEPS_ERROR", "Error fetching steps data: ${error.message}", null) 
                     }
                 })
-                .discard()
+                
         } catch (e: Exception) {
             android.util.Log.e("PolarPlugin", "Exception in getSteps", e)
             result.error("UNEXPECTED_ERROR", "Unexpected error in getSteps: ${e.message}", null)
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun getDistance(call: MethodCall, result: Result) {
         try {
             android.util.Log.d("PolarPlugin", "getDistance called with arguments: ${call.arguments}")
@@ -1170,18 +1139,8 @@ class PolarPlugin :
             
             android.util.Log.d("PolarPlugin", "Parsing dates: fromDate=$fromDateString, toDate=$toDateString")
             
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val fromDateParsed = dateFormat.parse(fromDateString)
-            val toDateParsed = dateFormat.parse(toDateString)
-            
-            if (fromDateParsed == null || toDateParsed == null) {
-                android.util.Log.e("PolarPlugin", "Failed to parse dates: fromDate=$fromDateParsed, toDate=$toDateParsed")
-                result.error("INVALID_DATE_FORMAT", "Could not parse date strings", null)
-                return
-            }
-            
-            val fromDate = fromDateParsed.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
-            val toDate = toDateParsed.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
+            val fromDate = LocalDate.parse(fromDateString)
+            val toDate = LocalDate.parse(toDateString)
             
             android.util.Log.d("PolarPlugin", "Calling Polar API getDistance with identifier=$identifier, fromDate=$fromDate, toDate=$toDate")
             
@@ -1219,14 +1178,13 @@ class PolarPlugin :
                         result.error("GET_DISTANCE_ERROR", "Error fetching distance data: ${error.message}", null) 
                     }
                 })
-                .discard()
+                
         } catch (e: Exception) {
             android.util.Log.e("PolarPlugin", "Exception in getDistance", e)
             result.error("UNEXPECTED_ERROR", "Unexpected error in getDistance: ${e.message}", null)
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun getActiveTime(call: MethodCall, result: Result) {
         try {
             android.util.Log.d("PolarPlugin", "getActiveTime called with arguments: ${call.arguments}")
@@ -1267,18 +1225,8 @@ class PolarPlugin :
             
             android.util.Log.d("PolarPlugin", "Parsing dates: fromDate=$fromDateString, toDate=$toDateString")
             
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val fromDateParsed = dateFormat.parse(fromDateString)
-            val toDateParsed = dateFormat.parse(toDateString)
-            
-            if (fromDateParsed == null || toDateParsed == null) {
-                android.util.Log.e("PolarPlugin", "Failed to parse dates: fromDate=$fromDateParsed, toDate=$toDateParsed")
-                result.error("INVALID_DATE_FORMAT", "Could not parse date strings", null)
-                return
-            }
-            
-            val fromDate = fromDateParsed.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
-            val toDate = toDateParsed.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
+            val fromDate = LocalDate.parse(fromDateString)
+            val toDate = LocalDate.parse(toDateString)
             
             android.util.Log.d("PolarPlugin", "Calling Polar API getActiveTime with identifier=$identifier, fromDate=$fromDate, toDate=$toDate")
             
@@ -1323,7 +1271,7 @@ class PolarPlugin :
                         result.error("GET_ACTIVE_TIME_ERROR", "Error fetching active time data: ${error.message}", null) 
                     }
                 })
-                .discard()
+                
         } catch (e: Exception) {
             android.util.Log.e("PolarPlugin", "Exception in getActiveTime", e)
             result.error("UNEXPECTED_ERROR", "Unexpected error in getActiveTime: ${e.message}", null)
@@ -1342,7 +1290,6 @@ class PolarPlugin :
         )
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun getActivitySampleData(call: MethodCall, result: Result) {
         try {
             android.util.Log.d("PolarPlugin", "getActivitySampleData called with arguments: ${call.arguments}")
@@ -1383,19 +1330,8 @@ class PolarPlugin :
             
             android.util.Log.d("PolarPlugin", "Parsing dates: fromDate=$fromDateString, toDate=$toDateString")
             
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-            val fromDateParsed = dateFormat.parse(fromDateString)
-            val toDateParsed = dateFormat.parse(toDateString)
-            
-            if (fromDateParsed == null || toDateParsed == null) {
-                android.util.Log.e("PolarPlugin", "Failed to parse dates: fromDate=$fromDateParsed, toDate=$toDateParsed")
-                result.error("INVALID_DATE_FORMAT", "Could not parse date strings", null)
-                return
-            }
-            
-            // Convert Date to LocalDate using Java 8 time APIs (API 26+)
-            val fromDate = fromDateParsed!!.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
-            val toDate = toDateParsed!!.toInstant().atZone(ZoneId.systemDefault()).toLocalDate()
+            val fromDate = LocalDate.parse(fromDateString)
+            val toDate = LocalDate.parse(toDateString)
             
             android.util.Log.d("PolarPlugin", "Calling Polar API getActivitySampleData with identifier=$identifier, fromDate=$fromDate, toDate=$toDate")
             
@@ -1444,8 +1380,13 @@ class PolarPlugin :
                             }
                         }
                         
+                        // Use startTime's local date — this is the sensor's calendar date
+                        // (sensor local time, set via setLocalTime, matches the date folder
+                        // the SDK read from). Only null if the day had no sample data.
+                        val date = dayData.polarActivitySamplesDataList?.firstOrNull()?.startTime?.toLocalDate()?.format(DateTimeFormatter.ISO_LOCAL_DATE)
+
                         mapOf(
-                            "date" to dayData.polarActivitySamplesDataList?.firstOrNull()?.startTime?.toLocalDate()?.toString(),
+                            "date" to date,
                             "samplesDataList" to samplesDataList
                         )
                     }
@@ -1460,7 +1401,7 @@ class PolarPlugin :
                         result.error("GET_ACTIVITY_SAMPLE_DATA_ERROR", "Error fetching activity sample data: ${error.message}", null) 
                     }
                 })
-                .discard()
+                
         } catch (e: Exception) {
             android.util.Log.e("PolarPlugin", "Exception in getActivitySampleData", e)
             result.error("UNEXPECTED_ERROR", "Unexpected error in getActivitySampleData: ${e.message}", null)
@@ -1482,7 +1423,7 @@ class PolarPlugin :
                     result.error(error.toString(), error.message, null)
                 }
             })
-            .discard()
+            
     }
 
     private fun sendTerminateAndStopSyncNotifications(call: MethodCall, result: Result) {
@@ -1500,7 +1441,103 @@ class PolarPlugin :
                     result.error(error.toString(), error.message, null)
                 }
             })
-            .discard()
+    }
+
+    private fun checkFirmwareUpdate(call: MethodCall, result: Result) {
+        val identifier = call.arguments as? String ?: run {
+            result.error("ERROR_INVALID_ARGUMENT", "Expected a single String argument", null)
+            return
+        }
+
+        wrapper.api
+            .checkFirmwareUpdate(identifier)
+            .subscribe({
+                val json = gson.toJson(checkFirmwareUpdateStatusToMap(it))
+                wrapper.success("firmwareUpdateCheckStatusReceived", listOf(identifier, json))
+                runOnUiThread { result.success(null) }
+            }, {
+                runOnUiThread {
+                    result.error(it.toString(), it.message, null)
+                }
+            })
+    }
+
+    private fun updateFirmware(call: MethodCall, result: Result) {
+        val identifier: String
+        val firmwareUrl: String?
+
+        if (call.arguments is String) {
+            identifier = call.arguments as String
+            firmwareUrl = null
+        } else if (call.arguments is List<*>) {
+            val args = call.arguments as List<*>
+            identifier = args[0] as String
+            firmwareUrl = args[1] as String
+        } else {
+            result.error("ERROR_INVALID_ARGUMENT", "Expected String or List arguments", null)
+            return
+        }
+
+        val flowable = if (firmwareUrl != null) {
+            wrapper.api.updateFirmware(identifier, firmwareUrl)
+        } else {
+            wrapper.api.updateFirmware(identifier)
+        }
+
+        var lastStatus: FirmwareUpdateStatus? = null
+
+        flowable
+            .doOnNext { lastStatus = it }
+            .subscribe({
+                val json = gson.toJson(firmwareUpdateStatusToMap(it))
+                wrapper.success("firmwareUpdateStatusReceived", listOf(identifier, json))
+            }, { error ->
+                // During firmware update, the device reboots which causes a BleDisconnected.
+                // If we were in the finalizing stage, this is expected and means success.
+                if (error is BleDisconnected && 
+                    (lastStatus is FirmwareUpdateStatus.FinalizingFwUpdate || 
+                     lastStatus is FirmwareUpdateStatus.FwUpdateCompletedSuccessfully)) {
+                    // Emit a completed status before finishing
+                    val completedJson = gson.toJson(mapOf("type" to "completed", "details" to "Firmware update completed, device rebooting"))
+                    wrapper.success("firmwareUpdateStatusReceived", listOf(identifier, completedJson))
+                    runOnUiThread { result.success(null) }
+                } else {
+                    runOnUiThread {
+                        result.error(error.toString(), error.message, null)
+                    }
+                }
+            }, {
+                runOnUiThread { result.success(null) }
+            })
+    }
+
+    private fun checkFirmwareUpdateStatusToMap(status: CheckFirmwareUpdateStatus): Map<String, Any?> {
+        return when (status) {
+            is CheckFirmwareUpdateStatus.CheckFwUpdateAvailable -> mapOf(
+                "type" to "available",
+                "version" to status.version
+            )
+            is CheckFirmwareUpdateStatus.CheckFwUpdateNotAvailable -> mapOf(
+                "type" to "notAvailable",
+                "details" to status.details
+            )
+            is CheckFirmwareUpdateStatus.CheckFwUpdateFailed -> mapOf(
+                "type" to "failed",
+                "details" to status.details
+            )
+        }
+    }
+
+    private fun firmwareUpdateStatusToMap(status: FirmwareUpdateStatus): Map<String, Any?> {
+        return when (status) {
+            is FirmwareUpdateStatus.FetchingFwUpdatePackage -> mapOf("type" to "fetching", "details" to status.details)
+            is FirmwareUpdateStatus.PreparingDeviceForFwUpdate -> mapOf("type" to "preparing", "details" to status.details)
+            is FirmwareUpdateStatus.WritingFwUpdatePackage -> mapOf("type" to "writing", "details" to status.details)
+            is FirmwareUpdateStatus.FinalizingFwUpdate -> mapOf("type" to "finalizing", "details" to status.details)
+            is FirmwareUpdateStatus.FwUpdateCompletedSuccessfully -> mapOf("type" to "completed", "details" to status.details)
+            is FirmwareUpdateStatus.FwUpdateNotAvailable -> mapOf("type" to "notAvailable", "details" to status.details)
+            is FirmwareUpdateStatus.FwUpdateFailed -> mapOf("type" to "failed", "details" to status.details)
+        }
     }
 
     // Note: Android PolarBleSDK doesn't have a requestDeviceInformation API.
@@ -1598,6 +1635,7 @@ class PolarWrapper(
     private val batteryLevelCache: MutableMap<String, Int> = mutableMapOf(),
 ) : PolarBleApiCallbackProvider {
     init {
+        android.util.Log.d("PolarPlugin", "PolarWrapper init: setting API callback")
         api.setApiCallback(this)
     }
 
@@ -1606,17 +1644,25 @@ class PolarWrapper(
         sink: EventSink,
     ) {
         sinks[id] = sink
+        android.util.Log.d("PolarPlugin", "addSink: id=$id, total sinks=${sinks.size}")
     }
 
     fun removeSink(id: Int) {
         sinks.remove(id)
+        android.util.Log.d("PolarPlugin", "removeSink: id=$id, remaining sinks=${sinks.size}")
     }
 
-    private fun success(
+    internal fun success(
         event: String,
         data: Any?,
     ) {
-        runOnUiThread { sinks.values.forEach { it.success(mapOf("event" to event, "data" to data)) } }
+        android.util.Log.d("PolarPlugin", "success: event=$event, sinks.size=${sinks.size}")
+        runOnUiThread {
+            if (sinks.isEmpty()) {
+                android.util.Log.w("PolarPlugin", "success: No sinks registered for event=$event")
+            }
+            sinks.values.forEach { it.success(mapOf("event" to event, "data" to data)) }
+        }
     }
 
     fun shutDown() {
@@ -1637,18 +1683,31 @@ class PolarWrapper(
         identifier: String,
         feature: PolarBleSdkFeature,
     ) {
+        android.util.Log.d("PolarPlugin", "bleSdkFeatureReady: identifier=$identifier, feature=${feature.name}")
         success("sdkFeatureReady", listOf(identifier, feature.name))
     }
 
+    override fun bleSdkFeaturesReadiness(
+        identifier: String,
+        ready: List<PolarBleSdkFeature>,
+        unavailable: List<PolarBleSdkFeature>,
+    ) {
+        android.util.Log.d("PolarPlugin", "bleSdkFeaturesReadiness: identifier=$identifier, ready=${ready.map { it.name }}, unavailable=${unavailable.map { it.name }}")
+        success("sdkFeaturesReadiness", listOf(identifier, ready.map { it.name }, unavailable.map { it.name }))
+    }
+
     override fun deviceConnected(polarDeviceInfo: PolarDeviceInfo) {
+        android.util.Log.d("PolarPlugin", "deviceConnected: deviceId=${polarDeviceInfo.deviceId}")
         success("deviceConnected", gson.toJson(polarDeviceInfo))
     }
 
     override fun deviceConnecting(polarDeviceInfo: PolarDeviceInfo) {
+        android.util.Log.d("PolarPlugin", "deviceConnecting: deviceId=${polarDeviceInfo.deviceId}")
         success("deviceConnecting", gson.toJson(polarDeviceInfo))
     }
 
     override fun deviceDisconnected(polarDeviceInfo: PolarDeviceInfo) {
+        android.util.Log.d("PolarPlugin", "deviceDisconnected: deviceId=${polarDeviceInfo.deviceId}")
         success(
             "deviceDisconnected",
             // The second argument is the `pairingError` field on iOS

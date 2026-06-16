@@ -231,10 +231,15 @@ class PolarPpgSample {
   /// channel + n ambient(s).
   final List<int> channelSamples;
 
+  /// Per-channel status bits for the PPG data.
+  /// Available from SDK 6.14.0+. May be null for older firmware/devices.
+  final List<int>? statusBits;
+
   /// Constructor
   PolarPpgSample({
     required this.timeStamp,
     required this.channelSamples,
+    this.statusBits,
   });
 
   /// From json
@@ -280,7 +285,7 @@ class PolarPpiSample {
 
   /// ppErrorEstimate estimate of the expected absolute error in PP-interval in milliseconds
   @JsonKey(readValue: _readErrorEstimate)
-  final int errorEstimate;
+  final int? errorEstimate;
 
   /// hr in BPM
   final int hr;

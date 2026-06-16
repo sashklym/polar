@@ -33,7 +33,7 @@ android {
         main.java.srcDirs += 'src/main/kotlin'
     }
     defaultConfig {
-        minSdkVersion 24
+        minSdkVersion 26
         consumerProguardFiles 'proguard-rules.pro'
     }
 
@@ -53,7 +53,7 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
 
     // Polar SDK with explicit version
-    api 'com.github.polarofficial:polar-ble-sdk:6.13.0'
+    api 'com.github.polarofficial:polar-ble-sdk:6.16.1'
     
     // RxJava dependencies
     implementation 'io.reactivex.rxjava3:rxjava:3.1.6'

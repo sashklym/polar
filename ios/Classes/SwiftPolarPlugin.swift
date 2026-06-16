@@ -120,11 +120,11 @@ public class SwiftPolarPlugin:
   }
 
   public static func register(with registrar: FlutterPluginRegistrar) {
-      let methodChannel = FlutterMethodChannel(
-        name: "polar/methods", binaryMessenger: registrar.messenger())
-      let eventChannel = FlutterEventChannel(
-        name: "polar/events", binaryMessenger: registrar.messenger())
-      let searchChannel = FlutterEventChannel(
+    let methodChannel = FlutterMethodChannel(
+      name: "polar/methods", binaryMessenger: registrar.messenger())
+    let eventChannel = FlutterEventChannel(
+      name: "polar/events", binaryMessenger: registrar.messenger())
+    let searchChannel = FlutterEventChannel(
       name: "polar/search", binaryMessenger: registrar.messenger())
 
     let instance = SwiftPolarPlugin(
@@ -182,6 +182,8 @@ public class SwiftPolarPlugin:
         enableSdkMode(call, result)
       case "disableSdkMode":
         disableSdkMode(call, result)
+      case "setAutomaticOHRMeasurementEnabled":
+        setAutomaticOHRMeasurementEnabled(call, result)
       case "isSdkModeEnabled":
         isSdkModeEnabled(call, result)
       case "getAvailableOfflineRecordingDataTypes":
@@ -194,12 +196,16 @@ public class SwiftPolarPlugin:
         stopOfflineRecording(call, result)
       case "getOfflineRecordingStatus":
         getOfflineRecordingStatus(call, result)
+      case "setOfflineRecordingTrigger":
+        setOfflineRecordingTrigger(call, result)
       case "listOfflineRecordings":
         listOfflineRecordings(call, result)
       case "getOfflineRecord":
         getOfflineRecord(call, result)
       case "removeOfflineRecord":
         removeOfflineRecord(call, result)
+      case "getChargerState":
+        getChargerState(call, result)
       case "getDiskSpace":
         getDiskSpace(call, result)
       case "getLocalTime":
@@ -238,19 +244,19 @@ public class SwiftPolarPlugin:
           code: "Error in Polar plugin", message: error.localizedDescription, details: nil))
     }
   }
-    
-    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
-      -> FlutterError?
-    {
-      initApi()
-      self.events = events
-      return nil
-    }
 
-    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-      events = nil
-      return nil
-    }
+  public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
+    -> FlutterError?
+  {
+    initApi()
+    self.events = events
+    return nil
+  }
+
+  public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    events = nil
+    return nil
+  }
 
   var searchSubscription: Disposable?
   lazy var searchHandler = StreamHandler(
@@ -509,127 +515,6 @@ public class SwiftPolarPlugin:
         })
   }
 
-  func checkFirmwareUpdate(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-    let identifier = call.arguments as! String
-    _ = api.checkFirmwareUpdate(identifier)
-      .subscribe(
-        onNext: { status in
-          var response: [String: Any]
-          switch status {
-          case .checkFwUpdateAvailable(let version):
-            response = [
-              "isUpdateAvailable": true,
-              "currentVersion": "",
-              "availableVersion": version
-            ]
-          case .checkFwUpdateNotAvailable(let details):
-            response = [
-              "isUpdateAvailable": false,
-              "currentVersion": details,
-              "availableVersion": NSNull()
-            ]
-          case .checkFwUpdateFailed(let details):
-            result(FlutterError(
-              code: "Error checking firmware update",
-              message: details,
-              details: nil))
-            return
-          }
-          
-          guard let jsonData = try? JSONSerialization.data(withJSONObject: response, options: []),
-                let jsonString = String(data: jsonData, encoding: .utf8) else {
-            result(FlutterError(
-              code: "Error encoding firmware update info",
-              message: "Failed to encode response",
-              details: nil))
-            return
-          }
-          result(jsonString)
-        },
-        onError: { error in
-          result(
-            FlutterError(
-              code: "Error checking firmware update",
-              message: error.localizedDescription,
-              details: nil))
-        })
-  }
-
-  func updateFirmware(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-    let identifier = call.arguments as! String
-    var resultSent = false
-    _ = api.updateFirmware(identifier)
-      .subscribe(
-        onNext: { [weak self] status in
-          guard let self = self else { return }
-          
-          // Map status to progress and emit progress events
-          let (progressPercentage, statusMessage, isCompleted) = self.mapFirmwareStatus(status)
-          let progressData: [String: Any] = [
-            "identifier": identifier,
-            "progressPercentage": progressPercentage,
-            "status": statusMessage,
-            "isCompleted": isCompleted
-          ]
-          self.success("firmwareUpdateProgress", data: progressData)
-          
-          // Handle completion
-          switch status {
-          case .fwUpdateCompletedSuccessfully:
-            if !resultSent {
-              resultSent = true
-              result(nil)
-            }
-          case .fwUpdateFailed(let details):
-            if !resultSent {
-              resultSent = true
-              result(FlutterError(
-                code: "Error updating firmware",
-                message: details,
-                details: nil))
-            }
-          case .fwUpdateNotAvailable(let details):
-            if !resultSent {
-              resultSent = true
-              result(FlutterError(
-                code: "Firmware update not available",
-                message: details,
-                details: nil))
-            }
-          default:
-            break
-          }
-        },
-        onError: { error in
-          if !resultSent {
-            result(
-              FlutterError(
-                code: "Error updating firmware",
-                message: error.localizedDescription,
-                details: nil))
-          }
-        })
-  }
-  
-  private func mapFirmwareStatus(_ status: FirmwareUpdateStatus) -> (Int, String, Bool) {
-    switch status {
-    case .fetchingFwUpdatePackage(let details):
-      return (10, "Fetching firmware package: \(details)", false)
-    case .preparingDeviceForFwUpdate(let details):
-      return (30, "Preparing device: \(details)", false)
-    case .writingFwUpdatePackage(let details):
-      return (60, "Writing firmware: \(details)", false)
-    case .finalizingFwUpdate(let details):
-      return (90, "Finalizing update: \(details)", false)
-    case .fwUpdateCompletedSuccessfully(let details):
-      return (100, "Update completed: \(details)", true)
-    case .fwUpdateNotAvailable(let details):
-      return (0, "Update not available: \(details)", false)
-    case .fwUpdateFailed(let details):
-      return (0, "Update failed: \(details)", false)
-    }
-  }
-
   func enableSdkMode(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     let identifier = call.arguments as! String
     _ = api.enableSDKMode(identifier).subscribe(
@@ -656,6 +541,22 @@ public class SwiftPolarPlugin:
       })
   }
 
+  func setAutomaticOHRMeasurementEnabled(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    let args = call.arguments as! [Any]
+    let identifier = args[0] as! String
+    let enabled = args[1] as! Bool
+    _ = api.setAutomaticOHRMeasurementEnabled(identifier, enabled: enabled).subscribe(
+      onCompleted: {
+        result(nil)
+      },
+      onError: { error in
+        result(
+          FlutterError(
+            code: "Error setting automatic OHR measurement", message: error.localizedDescription,
+            details: nil))
+      })
+  }
+
   func isSdkModeEnabled(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     let identifier = call.arguments as! String
     _ = api.isSDKModeEnabled(identifier).subscribe(
@@ -670,9 +571,9 @@ public class SwiftPolarPlugin:
       })
   }
 
-private func success(_ event: String, data: Any? = nil) {
+  private func success(_ event: String, data: Any? = nil) {
     DispatchQueue.main.async {
-        self.events?(["event": event, "data": data])
+      self.events?(["event": event, "data": data])
     }
   }
 
@@ -729,11 +630,21 @@ private func success(_ event: String, data: Any? = nil) {
   }
 
   public func bleSdkFeatureReady(_ identifier: String, feature: PolarBleSdkFeature) {
-      success(
+    success(
       "sdkFeatureReady",
       data: [
         identifier,
         PolarBleSdkFeature.allCases.firstIndex(of: feature)!,
+      ])
+  }
+
+  public func bleSdkFeaturesReadiness(_ identifier: String, ready: [PolarBleSdkFeature], unavailable: [PolarBleSdkFeature]) {
+    success(
+      "sdkFeaturesReadiness",
+      data: [
+        identifier,
+        ready.map { PolarBleSdkFeature.allCases.firstIndex(of: $0)! },
+        unavailable.map { PolarBleSdkFeature.allCases.firstIndex(of: $0)! },
       ])
   }
 
@@ -899,7 +810,8 @@ private func success(_ event: String, data: Any? = nil) {
           } else {
             result(
               FlutterError(
-                code: "ENCODING_ERROR", message: "Failed to encode offline recording settings", details: nil))
+                code: "ENCODING_ERROR", message: "Failed to encode offline recording settings",
+                details: nil))
           }
         },
         onFailure: { error in
@@ -977,6 +889,49 @@ private func success(_ event: String, data: Any? = nil) {
               code: "Error getting offline recording status", message: error.localizedDescription,
               details: nil)
           )
+        })
+  }
+
+  func setOfflineRecordingTrigger(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    let arguments = call.arguments as! [Any]
+    let identifier = arguments[0] as! String
+    let modeIndex = arguments[1] as! Int
+    let featuresList = arguments[2] as! [[Any?]]
+
+    let triggerModes: [PolarOfflineRecordingTriggerMode] = [
+      .triggerDisabled,
+      .triggerSystemStart,
+      .triggerExerciseStart,
+    ]
+    let mode = triggerModes[modeIndex]
+
+    var triggerFeatures: [PolarDeviceDataType: PolarSensorSetting?] = [:]
+    for entry in featuresList {
+      let featureIndex = entry[0] as! Int
+      let feature = PolarDeviceDataType.allCases[featureIndex]
+      let settingsJson = entry[1] as? String
+      let settings: PolarSensorSetting? =
+        settingsJson != nil
+        ? try? decoder.decode(
+          PolarSensorSettingCodable.self,
+          from: settingsJson!.data(using: .utf8)!
+        ).data : nil
+      triggerFeatures[feature] = settings
+    }
+
+    let trigger = PolarOfflineRecordingTrigger(
+      triggerMode: mode, triggerFeatures: triggerFeatures)
+
+    _ = api.setOfflineRecordingTrigger(identifier, trigger: trigger, secret: nil)
+      .subscribe(
+        onCompleted: {
+          result(nil)
+        },
+        onError: { error in
+          result(
+            FlutterError(
+              code: "Error setting offline recording trigger",
+              message: error.localizedDescription, details: nil))
         })
   }
 
@@ -1097,6 +1052,28 @@ private func success(_ event: String, data: Any? = nil) {
             FlutterError(
               code: "Error removing exercise", message: error.localizedDescription, details: nil))
         })
+    }
+  }
+
+  func getChargerState(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    let identifier = call.arguments as! String
+    do {
+      let chargeState = try api.getChargerState(identifier: identifier)
+      // Return as string matching the Swift enum case names
+      let stateString: String
+      switch chargeState {
+      case .charging: stateString = "charging"
+      case .dischargingActive: stateString = "dischargingActive"
+      case .dischargingInactive: stateString = "dischargingInactive"
+      default: stateString = "unknown"
+      }
+      result(stateString)
+    } catch {
+      result(
+        FlutterError(
+          code: "GET_CHARGER_STATE_ERROR",
+          message: error.localizedDescription,
+          details: nil))
     }
   }
 
@@ -1301,22 +1278,27 @@ private func success(_ event: String, data: Any? = nil) {
 
   func deleteStoredDeviceData(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let arguments = call.arguments as? [Any],
-          arguments.count == 3,
-          let identifier = arguments[0] as? String,
-          let dataTypeIndex = arguments[1] as? Int,
-          let untilDateString = arguments[2] as? String else {
-        result(FlutterError(code: "INVALID_ARGUMENTS",
-                          message: "Expected [identifier, dataType, untilDate]",
-                          details: nil))
-        return
+      arguments.count == 3,
+      let identifier = arguments[0] as? String,
+      let dataTypeIndex = arguments[1] as? Int,
+      let untilDateString = arguments[2] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGUMENTS",
+          message: "Expected [identifier, dataType, untilDate]",
+          details: nil))
+      return
     }
 
     // Convert dataType index to PolarStoredDataType
     guard dataTypeIndex < PolarBleSdk.PolarStoredDataType.StoredDataType.allCases.count else {
-        result(FlutterError(code: "INVALID_DATA_TYPE",
-                          message: "Invalid data type index",
-                          details: nil))
-        return
+      result(
+        FlutterError(
+          code: "INVALID_DATA_TYPE",
+          message: "Invalid data type index",
+          details: nil))
+      return
     }
     let dataType = PolarBleSdk.PolarStoredDataType.StoredDataType.allCases[dataTypeIndex]
 
@@ -1324,321 +1306,387 @@ private func success(_ event: String, data: Any? = nil) {
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "yyyy-MM-dd"
     guard let untilDate = dateFormatter.date(from: untilDateString) else {
-        result(FlutterError(code: "INVALID_DATE_FORMAT",
-                          message: "Date must be in yyyy-MM-dd format",
-                          details: nil))
-        return
+      result(
+        FlutterError(
+          code: "INVALID_DATE_FORMAT",
+          message: "Date must be in yyyy-MM-dd format",
+          details: nil))
+      return
     }
 
     _ = api.deleteStoredDeviceData(identifier, dataType: dataType, until: untilDate)
-        .subscribe(
-            onCompleted: {
-                result(nil)
-            },
-            onError: { error in
-                result(FlutterError(code: "ERROR_DELETING_DATA",
-                                  message: error.localizedDescription,
-                                  details: nil))
-            }
-        )
+      .subscribe(
+        onCompleted: {
+          result(nil)
+        },
+        onError: { error in
+          result(
+            FlutterError(
+              code: "ERROR_DELETING_DATA",
+              message: error.localizedDescription,
+              details: nil))
+        }
+      )
   }
 
   func deleteDeviceDateFolders(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let arguments = call.arguments as? [Any],
-          arguments.count == 3,
-          let identifier = arguments[0] as? String,
-          let fromDateString = arguments[1] as? String,
-          let toDateString = arguments[2] as? String else {
-        result(FlutterError(code: "INVALID_ARGUMENTS",
-                          message: "Expected [identifier, fromDate, toDate]",
-                          details: nil))
-        return
+      arguments.count == 3,
+      let identifier = arguments[0] as? String,
+      let fromDateString = arguments[1] as? String,
+      let toDateString = arguments[2] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGUMENTS",
+          message: "Expected [identifier, fromDate, toDate]",
+          details: nil))
+      return
     }
 
     // Parse the dates
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "yyyy-MM-dd"
-    
+
     guard let fromDate = dateFormatter.date(from: fromDateString),
-          let toDate = dateFormatter.date(from: toDateString) else {
-        result(FlutterError(code: "INVALID_DATE_FORMAT",
-                          message: "Dates must be in yyyy-MM-dd format",
-                          details: nil))
-        return
+      let toDate = dateFormatter.date(from: toDateString)
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_DATE_FORMAT",
+          message: "Dates must be in yyyy-MM-dd format",
+          details: nil))
+      return
     }
 
     _ = api.deleteDeviceDateFolders(identifier, fromDate: fromDate, toDate: toDate)
-        .subscribe(
-            onCompleted: {
-                result(nil)
-            },
-            onError: { error in
-                result(FlutterError(code: "ERROR_DELETING_FOLDERS",
-                                  message: error.localizedDescription,
-                                  details: nil))
-            }
-        )
+      .subscribe(
+        onCompleted: {
+          result(nil)
+        },
+        onError: { error in
+          result(
+            FlutterError(
+              code: "ERROR_DELETING_FOLDERS",
+              message: error.localizedDescription,
+              details: nil))
+        }
+      )
   }
 
   func getSteps(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        guard let arguments = call.arguments as? [Any],
-              arguments.count == 3,
-              let identifier = arguments[0] as? String,
-              let fromDateString = arguments[1] as? String,
-              let toDateString = arguments[2] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
-                              message: "Expected [identifier, fromDate, toDate]",
-                              details: nil))
-            return
-        }
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        
-        guard let fromDate = dateFormatter.date(from: fromDateString),
-              let toDate = dateFormatter.date(from: toDateString) else {
-            result(FlutterError(code: "INVALID_DATE_FORMAT",
-                              message: "Dates must be in yyyy-MM-dd format",
-                              details: nil))
-            return
-        }
-
-        _ = api.getSteps(identifier: identifier, fromDate: fromDate, toDate: toDate)
-            .subscribe(
-                onSuccess: { stepsData in
-                    do {
-                        let encoder = JSONEncoder()
-                        encoder.dateEncodingStrategy = .iso8601
-                        let jsonData = try encoder.encode(stepsData)
-                        if let jsonString = String(data: jsonData, encoding: .utf8) {
-                            result(jsonString)
-                        } else {
-                            result(FlutterError(code: "ENCODING_ERROR",
-                                              message: "Failed to convert JSON data to string",
-                                              details: nil))
-                        }
-                    } catch {
-                        result(FlutterError(code: "ENCODING_ERROR",
-                                          message: "Failed to encode steps data: \(error.localizedDescription)",
-                                          details: nil))
-                    }
-                },
-                onFailure: { error in
-                    result(FlutterError(code: "ERROR_GETTING_STEPS",
-                                      message: error.localizedDescription,
-                                      details: nil))
-                }
-            )
+    guard let arguments = call.arguments as? [Any],
+      arguments.count == 3,
+      let identifier = arguments[0] as? String,
+      let fromDateString = arguments[1] as? String,
+      let toDateString = arguments[2] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGUMENTS",
+          message: "Expected [identifier, fromDate, toDate]",
+          details: nil))
+      return
     }
+
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "yyyy-MM-dd"
+
+    guard let fromDate = dateFormatter.date(from: fromDateString),
+      let toDate = dateFormatter.date(from: toDateString)
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_DATE_FORMAT",
+          message: "Dates must be in yyyy-MM-dd format",
+          details: nil))
+      return
+    }
+
+    _ = api.getSteps(identifier: identifier, fromDate: fromDate, toDate: toDate)
+      .subscribe(
+        onSuccess: { stepsData in
+          do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let jsonData = try encoder.encode(stepsData)
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+              result(jsonString)
+            } else {
+              result(
+                FlutterError(
+                  code: "ENCODING_ERROR",
+                  message: "Failed to convert JSON data to string",
+                  details: nil))
+            }
+          } catch {
+            result(
+              FlutterError(
+                code: "ENCODING_ERROR",
+                message: "Failed to encode steps data: \(error.localizedDescription)",
+                details: nil))
+          }
+        },
+        onFailure: { error in
+          result(
+            FlutterError(
+              code: "ERROR_GETTING_STEPS",
+              message: error.localizedDescription,
+              details: nil))
+        }
+      )
+  }
 
   func getDistance(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        guard let arguments = call.arguments as? [Any],
-              arguments.count == 3,
-              let identifier = arguments[0] as? String,
-              let fromDateString = arguments[1] as? String,
-              let toDateString = arguments[2] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
-                              message: "Expected [identifier, fromDate, toDate]",
-                              details: nil))
-            return
-        }
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        
-        guard let fromDate = dateFormatter.date(from: fromDateString),
-              let toDate = dateFormatter.date(from: toDateString) else {
-            result(FlutterError(code: "INVALID_DATE_FORMAT",
-                              message: "Dates must be in yyyy-MM-dd format",
-                              details: nil))
-            return
-        }
-
-        _ = api.getDistance(identifier: identifier, fromDate: fromDate, toDate: toDate)
-            .subscribe(
-                onSuccess: { distanceData in
-                    do {
-                        let encoder = JSONEncoder()
-                        encoder.dateEncodingStrategy = .iso8601
-                        let codables = distanceData.map(PolarDistanceDataCodable.init)
-                        let jsonData = try encoder.encode(codables)
-                        if let jsonString = String(data: jsonData, encoding: .utf8) {
-                            result(jsonString)
-                        } else {
-                            result(FlutterError(code: "ENCODING_ERROR",
-                                              message: "Failed to convert JSON data to string",
-                                              details: nil))
-                        }
-                    } catch {
-                        result(FlutterError(code: "ENCODING_ERROR",
-                                          message: "Failed to encode distance data: \(error.localizedDescription)",
-                                          details: nil))
-                    }
-                },
-                onFailure: { error in
-                    result(FlutterError(code: "ERROR_GETTING_DISTANCE",
-                                      message: error.localizedDescription,
-                                      details: nil))
-                }
-            )
+    guard let arguments = call.arguments as? [Any],
+      arguments.count == 3,
+      let identifier = arguments[0] as? String,
+      let fromDateString = arguments[1] as? String,
+      let toDateString = arguments[2] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGUMENTS",
+          message: "Expected [identifier, fromDate, toDate]",
+          details: nil))
+      return
     }
+
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "yyyy-MM-dd"
+
+    guard let fromDate = dateFormatter.date(from: fromDateString),
+      let toDate = dateFormatter.date(from: toDateString)
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_DATE_FORMAT",
+          message: "Dates must be in yyyy-MM-dd format",
+          details: nil))
+      return
+    }
+
+    _ = api.getDistance(identifier: identifier, fromDate: fromDate, toDate: toDate)
+      .subscribe(
+        onSuccess: { distanceData in
+          do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let codables = distanceData.map(PolarDistanceDataCodable.init)
+            let jsonData = try encoder.encode(codables)
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+              result(jsonString)
+            } else {
+              result(
+                FlutterError(
+                  code: "ENCODING_ERROR",
+                  message: "Failed to convert JSON data to string",
+                  details: nil))
+            }
+          } catch {
+            result(
+              FlutterError(
+                code: "ENCODING_ERROR",
+                message: "Failed to encode distance data: \(error.localizedDescription)",
+                details: nil))
+          }
+        },
+        onFailure: { error in
+          result(
+            FlutterError(
+              code: "ERROR_GETTING_DISTANCE",
+              message: error.localizedDescription,
+              details: nil))
+        }
+      )
+  }
 
   func getActiveTime(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        guard let arguments = call.arguments as? [Any],
-              arguments.count == 3,
-              let identifier = arguments[0] as? String,
-              let fromDateString = arguments[1] as? String,
-              let toDateString = arguments[2] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
-                              message: "Expected [identifier, fromDate, toDate]",
-                              details: nil))
-            return
-        }
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        
-        guard let fromDate = dateFormatter.date(from: fromDateString),
-              let toDate = dateFormatter.date(from: toDateString) else {
-            result(FlutterError(code: "INVALID_DATE_FORMAT",
-                              message: "Dates must be in yyyy-MM-dd format",
-                              details: nil))
-            return
-        }
-
-        _ = api.getActiveTime(identifier: identifier, fromDate: fromDate, toDate: toDate)
-            .subscribe(
-                onSuccess: { activeTimeData in
-                    do {
-                        let encoder = JSONEncoder()
-                        encoder.dateEncodingStrategy = .iso8601
-                        let codables = activeTimeData.map(PolarActiveTimeDataCodable.init)
-                        let jsonData = try encoder.encode(codables)
-                        if let jsonString = String(data: jsonData, encoding: .utf8) {
-                            result(jsonString)
-                        } else {
-                            result(FlutterError(code: "ENCODING_ERROR",
-                                              message: "Failed to convert JSON data to string",
-                                              details: nil))
-                        }
-                    } catch {
-                        result(FlutterError(code: "ENCODING_ERROR",
-                                          message: "Failed to encode active time data: \(error.localizedDescription)",
-                                          details: nil))
-                    }
-                },
-                onFailure: { error in
-                    result(FlutterError(code: "ERROR_GETTING_ACTIVE_TIME",
-                                      message: error.localizedDescription,
-                                      details: nil))
-                }
-            )
+    guard let arguments = call.arguments as? [Any],
+      arguments.count == 3,
+      let identifier = arguments[0] as? String,
+      let fromDateString = arguments[1] as? String,
+      let toDateString = arguments[2] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGUMENTS",
+          message: "Expected [identifier, fromDate, toDate]",
+          details: nil))
+      return
     }
+
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "yyyy-MM-dd"
+
+    guard let fromDate = dateFormatter.date(from: fromDateString),
+      let toDate = dateFormatter.date(from: toDateString)
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_DATE_FORMAT",
+          message: "Dates must be in yyyy-MM-dd format",
+          details: nil))
+      return
+    }
+
+    _ = api.getActiveTime(identifier: identifier, fromDate: fromDate, toDate: toDate)
+      .subscribe(
+        onSuccess: { activeTimeData in
+          do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let codables = activeTimeData.map(PolarActiveTimeDataCodable.init)
+            let jsonData = try encoder.encode(codables)
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+              result(jsonString)
+            } else {
+              result(
+                FlutterError(
+                  code: "ENCODING_ERROR",
+                  message: "Failed to convert JSON data to string",
+                  details: nil))
+            }
+          } catch {
+            result(
+              FlutterError(
+                code: "ENCODING_ERROR",
+                message: "Failed to encode active time data: \(error.localizedDescription)",
+                details: nil))
+          }
+        },
+        onFailure: { error in
+          result(
+            FlutterError(
+              code: "ERROR_GETTING_ACTIVE_TIME",
+              message: error.localizedDescription,
+              details: nil))
+        }
+      )
+  }
 
   func getActivitySampleData(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        guard let arguments = call.arguments as? [Any],
-              arguments.count == 3,
-              let identifier = arguments[0] as? String,
-              let fromDateString = arguments[1] as? String,
-              let toDateString = arguments[2] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
-                              message: "Expected [identifier, fromDate, toDate]",
-                              details: nil))
-            return
-        }
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        
-        guard let fromDate = dateFormatter.date(from: fromDateString),
-              let toDate = dateFormatter.date(from: toDateString) else {
-            result(FlutterError(code: "INVALID_DATE_FORMAT",
-                              message: "Dates must be in yyyy-MM-dd format",
-                              details: nil))
-            return
-        }
-
-        _ = api.getActivitySampleData(identifier: identifier, fromDate: fromDate, toDate: toDate)
-            .subscribe(
-                onSuccess: { activityDayDataList in
-                    do {
-                        // Convert the data directly from the native structures
-                        let response = activityDayDataList.map { dayData -> [String: Any] in
-                            let samplesDataList = dayData.polarActivityDataList.compactMap { activityData -> [String: Any]? in
-                                // Access the samples directly from the activityData
-                                guard let samples = activityData.samples else { return nil }
-                                
-                                // Convert startTime to ISO8601 string
-                                let formatter = ISO8601DateFormatter()
-                                let startTimeString = formatter.string(from: samples.startTime)
-                                
-                                // Convert activityInfoList
-                                let activityInfoList = samples.activityInfoList.map { activityInfo in
-                                    [
-                                        "timeStamp": formatter.string(from: activityInfo.timeStamp),
-                                        "activityClass": activityInfo.activityClass.rawValue,
-                                        "factor": activityInfo.factor
-                                    ]
-                                }
-                                
-                                return [
-                                    "startTime": startTimeString,
-                                    "metRecordingInterval": samples.metRecordingInterval,
-                                    "metSamples": samples.metSamples ?? [],
-                                    "stepRecordingInterval": samples.stepRecordingInterval,
-                                    "stepSamples": samples.stepSamples ?? [],
-                                    "activityInfoList": activityInfoList
-                                ]
-                            }
-                            
-                            // Extract date string from first sample's startTime
-                            let dateString: String
-                            if let firstSample = samplesDataList.first,
-                               let startTime = firstSample["startTime"] as? String,
-                               !startTime.isEmpty {
-                                // Extract date part from ISO8601 string (YYYY-MM-DD)
-                                if let dateRange = startTime.range(of: "T") {
-                                    dateString = String(startTime[..<dateRange.lowerBound])
-                                } else {
-                                    dateString = startTime
-                                }
-                            } else {
-                                dateString = ""
-                            }
-                            
-                            return [
-                                "date": dateString,
-                                "samplesDataList": samplesDataList
-                            ]
-                        }
-                        
-                        let jsonData = try JSONSerialization.data(withJSONObject: response, options: [])
-                        if let jsonString = String(data: jsonData, encoding: .utf8) {
-                            result(jsonString)
-                        } else {
-                            result(FlutterError(code: "ENCODING_ERROR",
-                                              message: "Failed to convert JSON data to string",
-                                              details: nil))
-                        }
-                    } catch {
-                        result(FlutterError(code: "ENCODING_ERROR",
-                                          message: "Failed to encode activity sample data: \(error.localizedDescription)",
-                                          details: nil))
-                    }
-                },
-                onFailure: { error in
-                    result(FlutterError(code: "ERROR_GETTING_ACTIVITY_SAMPLE_DATA",
-                                      message: error.localizedDescription,
-                                      details: nil))
-                }
-            )
+    guard let arguments = call.arguments as? [Any],
+      arguments.count == 3,
+      let identifier = arguments[0] as? String,
+      let fromDateString = arguments[1] as? String,
+      let toDateString = arguments[2] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGUMENTS",
+          message: "Expected [identifier, fromDate, toDate]",
+          details: nil))
+      return
     }
 
-  func sendInitializationAndStartSyncNotifications(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "yyyy-MM-dd"
+
+    guard let fromDate = dateFormatter.date(from: fromDateString),
+      let toDate = dateFormatter.date(from: toDateString)
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_DATE_FORMAT",
+          message: "Dates must be in yyyy-MM-dd format",
+          details: nil))
+      return
+    }
+
+    _ = api.getActivitySampleData(identifier: identifier, fromDate: fromDate, toDate: toDate)
+      .subscribe(
+        onSuccess: { activityDayDataList in
+          do {
+            // Convert the data directly from the native structures
+            let response = activityDayDataList.map { dayData -> [String: Any] in
+              let samplesDataList = dayData.polarActivityDataList.compactMap {
+                activityData -> [String: Any]? in
+                // Access the samples directly from the activityData
+                guard let samples = activityData.samples else { return nil }
+
+                // Convert startTime to ISO8601 string
+                let formatter = ISO8601DateFormatter()
+                let startTimeString = formatter.string(from: samples.startTime)
+
+                // Convert activityInfoList
+                let activityInfoList = samples.activityInfoList.map { activityInfo in
+                  [
+                    "timeStamp": formatter.string(from: activityInfo.timeStamp),
+                    "activityClass": activityInfo.activityClass.rawValue,
+                    "factor": activityInfo.factor,
+                  ]
+                }
+
+                return [
+                  "startTime": startTimeString,
+                  "metRecordingInterval": samples.metRecordingInterval,
+                  "metSamples": samples.metSamples ?? [],
+                  "stepRecordingInterval": samples.stepRecordingInterval,
+                  "stepSamples": samples.stepSamples ?? [],
+                  "activityInfoList": activityInfoList,
+                ]
+              }
+
+              // Extract date from first sample's startTime (sensor-local calendar date)
+              let dateString: String
+              if let firstSample = samplesDataList.first,
+                let startTime = firstSample["startTime"] as? String,
+                !startTime.isEmpty
+              {
+                // Extract date part from ISO8601 string (YYYY-MM-DD)
+                if let dateRange = startTime.range(of: "T") {
+                  dateString = String(startTime[..<dateRange.lowerBound])
+                } else {
+                  dateString = startTime
+                }
+              } else {
+                dateString = ""
+              }
+
+              return [
+                "date": dateString,
+                "samplesDataList": samplesDataList,
+              ]
+            }
+
+            let jsonData = try JSONSerialization.data(withJSONObject: response, options: [])
+            if let jsonString = String(data: jsonData, encoding: .utf8) {
+              result(jsonString)
+            } else {
+              result(
+                FlutterError(
+                  code: "ENCODING_ERROR",
+                  message: "Failed to convert JSON data to string",
+                  details: nil))
+            }
+          } catch {
+            result(
+              FlutterError(
+                code: "ENCODING_ERROR",
+                message: "Failed to encode activity sample data: \(error.localizedDescription)",
+                details: nil))
+          }
+        },
+        onFailure: { error in
+          result(
+            FlutterError(
+              code: "ERROR_GETTING_ACTIVITY_SAMPLE_DATA",
+              message: error.localizedDescription,
+              details: nil))
+        }
+      )
+  }
+
+  func sendInitializationAndStartSyncNotifications(
+    _ call: FlutterMethodCall, _ result: @escaping FlutterResult
+  ) {
     guard let identifier = call.arguments as? String else {
-      result(FlutterError(code: "ERROR_INVALID_ARGUMENT",
-                        message: "Expected a single String argument",
-                        details: nil))
+      result(
+        FlutterError(
+          code: "ERROR_INVALID_ARGUMENT",
+          message: "Expected a single String argument",
+          details: nil))
       return
     }
 
@@ -1648,18 +1696,24 @@ private func success(_ event: String, data: Any? = nil) {
           result(nil)
         },
         onError: { error in
-          result(FlutterError(code: error.localizedDescription,
-                            message: error.localizedDescription,
-                            details: nil))
+          result(
+            FlutterError(
+              code: error.localizedDescription,
+              message: error.localizedDescription,
+              details: nil))
         }
       )
   }
 
-  func sendTerminateAndStopSyncNotifications(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+  func sendTerminateAndStopSyncNotifications(
+    _ call: FlutterMethodCall, _ result: @escaping FlutterResult
+  ) {
     guard let identifier = call.arguments as? String else {
-      result(FlutterError(code: "ERROR_INVALID_ARGUMENT",
-                        message: "Expected a single String argument",
-                        details: nil))
+      result(
+        FlutterError(
+          code: "ERROR_INVALID_ARGUMENT",
+          message: "Expected a single String argument",
+          details: nil))
       return
     }
 
@@ -1669,9 +1723,11 @@ private func success(_ event: String, data: Any? = nil) {
           result(nil)
         },
         onError: { error in
-          result(FlutterError(code: error.localizedDescription,
-                            message: error.localizedDescription,
-                            details: nil))
+          result(
+            FlutterError(
+              code: error.localizedDescription,
+              message: error.localizedDescription,
+              details: nil))
         }
       )
   }
@@ -1753,6 +1809,95 @@ private func success(_ event: String, data: Any? = nil) {
     }
     
     result(batteryLevel)
+  }
+
+  func checkFirmwareUpdate(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    guard let identifier = call.arguments as? String else {
+      result(
+        FlutterError(
+          code: "ERROR_INVALID_ARGUMENT",
+          message: "Expected a single String argument",
+          details: nil))
+      return
+    }
+
+    _ = api.checkFirmwareUpdate(identifier)
+      .subscribe(
+        onNext: { status in
+          var jsonStatus: [String: Any] = [:]
+          switch status {
+          case .checkFwUpdateAvailable(let version):
+            jsonStatus = ["type": "available", "version": version]
+          case .checkFwUpdateNotAvailable(let details):
+            jsonStatus = ["type": "notAvailable", "details": details]
+          case .checkFwUpdateFailed(let details):
+            jsonStatus = ["type": "failed", "details": details]
+          }
+
+          self.success("firmwareUpdateCheckStatusReceived", data: [identifier, jsonStatus])
+        },
+        onError: { error in
+          let jsonStatus: [String: Any] = ["type": "failed", "details": error.localizedDescription]
+          self.success("firmwareUpdateCheckStatusReceived", data: [identifier, jsonStatus])
+        })
+
+    result(nil)
+  }
+
+  func updateFirmware(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    let identifier: String
+    let firmwareUrl: String?
+
+    if let args = call.arguments as? [Any], args.count == 2,
+      let id = args[0] as? String, let url = args[1] as? String
+    {
+      identifier = id
+      firmwareUrl = url
+    } else if let id = call.arguments as? String {
+      identifier = id
+      firmwareUrl = nil
+    } else {
+      result(
+        FlutterError(
+          code: "ERROR_INVALID_ARGUMENT",
+          message: "Expected [String, String] or String",
+          details: nil))
+      return
+    }
+
+    let observable =
+      firmwareUrl != nil
+      ? api.updateFirmware(identifier, fromFirmwareURL: URL(string: firmwareUrl!)!)
+      : api.updateFirmware(identifier)
+
+    _ = observable.subscribe(
+      onNext: { status in
+        var jsonStatus: [String: Any] = [:]
+        switch status {
+        case .fetchingFwUpdatePackage(let details):
+          jsonStatus = ["type": "fetchingPackage", "details": details]
+        case .preparingDeviceForFwUpdate(let details):
+          jsonStatus = ["type": "preparingDevice", "details": details]
+        case .writingFwUpdatePackage(let details):
+          jsonStatus = ["type": "writingPackage", "details": details]
+        case .finalizingFwUpdate(let details):
+          jsonStatus = ["type": "finalizing", "details": details]
+        case .fwUpdateCompletedSuccessfully(let details):
+          jsonStatus = ["type": "completed", "details": details]
+        case .fwUpdateNotAvailable(let details):
+          jsonStatus = ["type": "notAvailable", "details": details]
+        case .fwUpdateFailed(let details):
+          jsonStatus = ["type": "failed", "details": details]
+        }
+
+        self.success("firmwareUpdateStatusReceived", data: [identifier, jsonStatus])
+      },
+      onError: { error in
+        let jsonStatus: [String: Any] = ["type": "failed", "details": error.localizedDescription]
+        self.success("firmwareUpdateStatusReceived", data: [identifier, jsonStatus])
+      })
+
+    result(nil)
   }
 }
 
@@ -1850,7 +1995,7 @@ class StreamingChannel: NSObject, FlutterStreamHandler {
     case .pressure:
       stream = api.startPressureStreaming(identifier, settings: settings!)
     case .skinTemperature:
-        stream = api.startSkinTemperatureStreaming(identifier, settings: settings!)
+      stream = api.startSkinTemperatureStreaming(identifier, settings: settings!)
     }
 
     subscription = stream.anySubscribe(

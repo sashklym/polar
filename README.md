@@ -55,40 +55,35 @@ You can check if there is a firmware update available for your Polar device and 
 
 ### Checking for Updates
 
-Use the `checkFirmwareUpdate()` method to check if an update is available:
+The `checkFirmwareUpdate()` method returns a stream of `PolarFirmwareUpdateCheckStatus` events:
 
 ```dart
-final updateInfo = await polar.checkFirmwareUpdate(identifier);
-if (updateInfo.isUpdateAvailable) {
-  debugPrint('Update available: ${updateInfo.availableVersion}');
-  debugPrint('Current version: ${updateInfo.currentVersion}');
-}
+polar.checkFirmwareUpdate(identifier).listen((status) {
+  if (status.type == 'available') {
+    debugPrint('Update available: ${status.version}');
+  } else {
+    debugPrint('No update available: ${status.details ?? ''}');
+  }
+});
 ```
 
 ### Performing Firmware Update
 
 To update the firmware, simply call the `updateFirmware()` method. This will update the device with the latest available firmware using the [Polar Firmware Management API](https://firmware-management.polar.com/docs/).
 
-You can monitor the update progress by listening to the `firmwareUpdateProgress` stream:
+`updateFirmware()` returns a stream of `PolarFirmwareUpdateStatus` events you can listen to in order to monitor progress:
 
 ```dart
-// Subscribe to firmware update progress
-final progressSubscription = polar.firmwareUpdateProgress
-    .where((event) => event.identifier == identifier)
-    .listen((progress) {
-  debugPrint('Firmware update progress: ${progress.progressPercentage}%');
-  debugPrint('Status: ${progress.status}');
-  
-  if (progress.isCompleted) {
+final updateSubscription = polar.updateFirmware(identifier).listen((status) {
+  debugPrint('Firmware update status: ${status.type} ${status.details ?? ''}');
+
+  if (status.type == 'completed') {
     debugPrint('Firmware update completed!');
   }
 });
 
-// Start the firmware update
-await polar.updateFirmware(identifier);
-
 // Don't forget to cancel the subscription when done
-await progressSubscription.cancel();
+await updateSubscription.cancel();
 ```
 
 ### ⚠️ Important Notes

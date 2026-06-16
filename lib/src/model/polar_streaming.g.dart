@@ -119,6 +119,9 @@ PolarPpgSample _$PolarPpgSampleFromJson(Map<String, dynamic> json) =>
       channelSamples: (json['channelSamples'] as List<dynamic>)
           .map((e) => (e as num).toInt())
           .toList(),
+      statusBits: (json['statusBits'] as List<dynamic>?)
+          ?.map((e) => (e as num).toInt())
+          .toList(),
     );
 
 Map<String, dynamic> _$PolarPpgSampleToJson(PolarPpgSample instance) =>
@@ -126,6 +129,7 @@ Map<String, dynamic> _$PolarPpgSampleToJson(PolarPpgSample instance) =>
       'timeStamp':
           const PolarSampleTimestampConverter().toJson(instance.timeStamp),
       'channelSamples': instance.channelSamples,
+      'statusBits': instance.statusBits,
     };
 
 PolarPpgData _$PolarPpgDataFromJson(Map<String, dynamic> json) => PolarPpgData(
@@ -144,7 +148,8 @@ Map<String, dynamic> _$PolarPpgDataToJson(PolarPpgData instance) =>
 PolarPpiSample _$PolarPpiSampleFromJson(Map<String, dynamic> json) =>
     PolarPpiSample(
       ppi: (_readPpi(json, 'ppi') as num).toInt(),
-      errorEstimate: (_readErrorEstimate(json, 'errorEstimate') as num).toInt(),
+      errorEstimate:
+          (_readErrorEstimate(json, 'errorEstimate') as num?)?.toInt(),
       hr: (json['hr'] as num).toInt(),
       blockerBit: const PlatformBooleanConverter().fromJson(json['blockerBit']),
       skinContactStatus:

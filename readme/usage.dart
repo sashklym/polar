@@ -38,34 +38,26 @@ void streamWhenReady() async {
   }
 }
 
-void firmwareUpdateExample() async {
-  // Check if firmware update is available
-  final updateInfo = await polar.checkFirmwareUpdate(identifier);
-  if (updateInfo.isUpdateAvailable) {
-    debugPrint('Update available: ${updateInfo.availableVersion}');
-    debugPrint('Current version: ${updateInfo.currentVersion}');
+void firmwareUpdateExample() {
+  // Check if a firmware update is available
+  polar.checkFirmwareUpdate(identifier).listen((status) {
+    debugPrint('Firmware update check: ${status.type}');
+    if (status.type == 'available') {
+      debugPrint('Available version: ${status.version}');
 
-    // Subscribe to firmware update progress
-    final progressSubscription = polar.firmwareUpdateProgress
-        .where((event) => event.identifier == identifier)
-        .listen((progress) {
-          debugPrint(
-            'Firmware update progress: ${progress.progressPercentage}%',
-          );
-          debugPrint('Status: ${progress.status}');
+      // Perform the firmware update
+      // WARNING: This will erase all data on the device
+      polar.updateFirmware(identifier).listen((update) {
+        debugPrint(
+          'Firmware update status: ${update.type} ${update.details ?? ''}',
+        );
 
-          if (progress.isCompleted) {
-            debugPrint('Firmware update completed!');
-          }
-        });
-
-    // Perform firmware update
-    // WARNING: This will erase all data on the device
-    await polar.updateFirmware(identifier);
-
-    // Cancel the subscription when done
-    await progressSubscription.cancel();
-  } else {
-    debugPrint('No firmware update available');
-  }
+        if (update.type == 'completed') {
+          debugPrint('Firmware update completed!');
+        }
+      });
+    } else {
+      debugPrint('No firmware update available: ${status.details ?? ''}');
+    }
+  });
 }
