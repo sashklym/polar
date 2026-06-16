@@ -1631,8 +1631,8 @@ class PolarWrapper(
             PolarBleSdkFeature.values().toSet(),
         ),
     private val sinks: MutableMap<Int, EventSink> = mutableMapOf(),
-    private val deviceInfoCache: MutableMap<String, MutableMap<String, String>> = mutableMapOf(),
-    private val batteryLevelCache: MutableMap<String, Int> = mutableMapOf(),
+    internal val deviceInfoCache: MutableMap<String, MutableMap<String, String>> = mutableMapOf(),
+    internal val batteryLevelCache: MutableMap<String, Int> = mutableMapOf(),
 ) : PolarBleApiCallbackProvider {
     init {
         android.util.Log.d("PolarPlugin", "PolarWrapper init: setting API callback")
